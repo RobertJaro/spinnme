@@ -1,0 +1,9 @@
+:root { --pst-color-primary: #087f8c; --pst-color-secondary: #d97745; }
+.spinnme-hero { padding: 2.4rem 2rem; margin: 1rem 0 2rem; border-radius: 1.25rem; background: linear-gradient(125deg, #102a43, #0c5b67); color: #f4fbfc; }
+.spinnme-hero h2 { color: white; font-size: 2.65rem; margin: .35rem 0 .75rem; }
+.spinnme-hero p { max-width: 44rem; color: #def2f3; font-size: 1.16rem; line-height: 1.6; }
+.spinnme-hero code { color: #fff; background: #163e50; }
+.spinnme-eyebrow { letter-spacing: .16em; font-size: .75rem !important; text-transform: uppercase; color: #91e0d4 !important; font-weight: 700; }
+.bd-main .bd-content .bd-article-container { max-width: 58rem; }
+.navbar-brand.logo { background: #fff; border-radius: .45rem; padding: .2rem .45rem; }
+.navbar-brand.logo img { width: auto; max-height: 3.1rem; }

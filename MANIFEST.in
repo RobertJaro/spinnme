@@ -1,0 +1,7 @@
+include README.md LICENSE THIRD_PARTY.md CITATION.cff CHANGELOG.md CONTRIBUTING.md RELEASE.md .readthedocs.yaml
+recursive-include licenses *.txt
+recursive-include docs *.md *.py *.txt *.css *.png *.html
+recursive-include examples *.py *.md *.sh *.ipynb
+recursive-include tests *.py
+prune docs/_build
+global-exclude __pycache__ *.py[cod] .DS_Store

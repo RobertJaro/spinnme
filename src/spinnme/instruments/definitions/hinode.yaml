@@ -1,0 +1,12 @@
+name: Hinode/SOT-SP (Fe I 6302 channel)
+instrument_id: hinode
+line_id: fe-i-6302
+type: hinode
+wavelength_unit: Angstrom
+wavelength_center: 6302.4931
+wavelength_grid: null
+wavelength_source: WAVELNnn
+stokes_order: IQUV
+axis_order: [stokes, wavelength, y, x]
+time_hdu: TIME_OFFSETS
+time_reference: observation

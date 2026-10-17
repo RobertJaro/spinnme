@@ -1,0 +1,11 @@
+name: HMI
+instrument_id: hmi
+line_id: fe-i-6173
+type: hmi
+wavelength_unit: Angstrom
+wavelength_center: 6173.3433
+wavelength_grid: [0.1720, 0.1032, 0.0344, -0.0344, -0.1032, -0.1720]
+wavelength_grid_is_offsets: true
+stokes_order: IQUV
+spectral_response: acquisition_calibration_required
+polarization_oversampling: false

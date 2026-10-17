@@ -1,0 +1,113 @@
+path: "<<run_path>>"
+work_path: "<<work_path>>"
+data:
+  train_configs:
+  - type: hinode
+    data_path: null
+    data_hdu: 0
+    axis_order: [stokes, wavelength, y, x]
+    stokes_order: IQUV
+    wavelength_center: 6301.5012
+    wavelength_grid: null
+    wavelength_unit: Angstrom
+    wavelength_grid_is_offsets: true
+    stokes_normalization: 1.0
+    instrument_id: HINODE_6301
+    line_id: fe-i-6301
+    time_reference: observation
+    time_hdu: TIME_OFFSETS
+    wavelength_range: [null, 6301.99715]
+  - type: hinode
+    data_path: null
+    data_hdu: 0
+    axis_order: [stokes, wavelength, y, x]
+    stokes_order: IQUV
+    wavelength_center: 6302.4931
+    wavelength_grid: null
+    wavelength_unit: Angstrom
+    wavelength_grid_is_offsets: true
+    stokes_normalization: 1.0
+    instrument_id: HINODE_6302
+    line_id: fe-i-6302
+    time_reference: observation
+    time_hdu: TIME_OFFSETS
+    wavelength_range: [6301.99715, null]
+  num_workers: 0
+  num_dataset_workers: 16
+  batch_size: 4096
+  dataset_batch_size: 512
+  seconds_per_dt: 3600
+  gauss_per_dB: 1000
+  valid_config:
+    type: hinode
+    data_path: null
+    data_hdu: 0
+    axis_order: [stokes, wavelength, y, x]
+    stokes_order: IQUV
+    wavelength_center: 6302.4931
+    wavelength_grid: null
+    wavelength_unit: Angstrom
+    wavelength_grid_is_offsets: true
+    stokes_normalization: 1.0
+    instrument_id: HINODE_6302
+    line_id: fe-i-6302
+    time_reference: observation
+    time_hdu: TIME_OFFSETS
+    wavelength_range: [6301.99715, null]
+    sample_idx: 0
+  ref_time: null
+instrument:
+- type: generic
+  instrument_id: HINODE_6301
+  limb_correction: false
+  velocity_correction: false
+  artifact_correction: false
+  line_id: fe-i-6301
+- type: generic
+  instrument_id: HINODE_6302
+  limb_correction: false
+  velocity_correction: false
+  artifact_correction: false
+  line_id: fe-i-6302
+model:
+  type: mlp
+  dim: 128
+  n_layers: 4
+  vector_potential: false
+  activation: swish
+  encoding_config:
+    type: fourier
+    num_frequencies: [8, 8, 8, 4]
+    max_frequencies: [64, 64, 64, 4]
+  b_sinh_scale: 10
+  v_sinh_scale: 1
+training:
+  plot_validation: true
+  epochs: -1
+  max_steps: 10000
+  check_val_every_n_epoch: null
+  val_check_interval: 1000
+  lr_params:
+    start: 0.001
+    end: 0.0001
+    iterations: 10000
+  optimizer_config:
+    type: soap
+normalization:
+  asinh_alphas:
+    Q: 0.01
+    U: 0.01
+    V: 0.01
+stokes_loss:
+  type: mse
+  continuum_normalization: true
+  continuum_quantile: 0.9
+weights:
+  I: 1.0
+  Q: 1.0
+  U: 1.0
+  V: 1.0
+logging:
+  project: spinnme
+  name: hinode-sp
+  mode: disabled

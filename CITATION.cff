@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "Please cite the SPINNME software version used in your work and the relevant method papers listed in the documentation."
+title: "SPINNME: spherical physics-informed neural Milne–Eddington inversions"
+type: software
+authors:
+  - family-names: Jarolim
+    given-names: Robert
+version: 0.1.0
+license: GPL-3.0-only
+repository-code: "https://github.com/RobertJaro/spinnme"

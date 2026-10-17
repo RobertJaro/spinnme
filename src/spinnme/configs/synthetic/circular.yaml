@@ -1,0 +1,77 @@
+path: "<<run_path>>"
+work_path: "<<work_path>>"
+
+data:
+  train_configs:
+    - type: fits
+      data_path: null
+      data_hdu: 0
+      axis_order: [stokes, wavelength, y, x]
+      stokes_order: IQUV
+      wavelength_center: 6173.3433
+      wavelength_grid: null
+      wavelength_unit: Angstrom
+      wavelength_grid_is_offsets: true
+      stokes_normalization: 1.0
+      instrument_id: CIRCULAR
+      line_id: fe-i-6173
+      time_reference: observation
+  num_workers: 0
+  num_dataset_workers: 0
+  batch_size: 128
+  dataset_batch_size: 64
+  seconds_per_dt: 3600
+  gauss_per_dB: 1000
+  valid_config:
+    type: fits
+    data_path: null
+    data_hdu: 0
+    axis_order: [stokes, wavelength, y, x]
+    stokes_order: IQUV
+    wavelength_center: 6173.3433
+    wavelength_grid: null
+    wavelength_unit: Angstrom
+    wavelength_grid_is_offsets: true
+    stokes_normalization: 1.0
+    instrument_id: CIRCULAR
+    line_id: fe-i-6173
+    time_reference: observation
+    sample_idx: 0
+  ref_time: '2025-01-01T00:00:00'
+
+instrument:
+  - type: generic
+    instrument_id: CIRCULAR
+    line_id: fe-i-6173
+
+model:
+  type: mlp
+  dim: 32
+  n_layers: 2
+  vector_potential: false
+  activation: swish
+  encoding_config: {type: identity}
+  b_sinh_scale: 10
+  v_sinh_scale: 1
+
+training:
+  plot_validation: true
+  epochs: -1
+  max_steps: 5
+  check_val_every_n_epoch: 1
+  optimizer_config: {type: adamw}
+
+normalization:
+  asinh_alphas: {Q: 0.01, U: 0.01, V: 0.01}
+
+stokes_loss:
+  type: mse
+  continuum_normalization: true
+  continuum_quantile: 0.9
+
+weights: {I: 1.0, Q: 1.0, U: 1.0, V: 1.0}
+
+logging:
+  project: spinnme
+  name: synthetic-circular
+  mode: disabled

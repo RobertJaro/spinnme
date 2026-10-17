@@ -1,0 +1,73 @@
+path: "<<run_path>>"
+work_path: "<<work_path>>"
+
+data:
+  train_configs:
+    - type: hmi
+      data_path: "<<data_path>>/stokes"
+      transmission_profile_directory: "<<data_path>>/transmission"
+      stokes_normalization: 50000.0
+      instrument_id: HMI
+      line_id: fe-i-6173
+      resolution: [256, 256]
+  num_workers: 0
+  num_dataset_workers: 16
+  batch_size: 4096
+  dataset_batch_size: 512
+  seconds_per_dt: 3600
+  gauss_per_dB: 1000
+  valid_config:
+    type: hmi
+    data_path: "<<data_path>>/stokes"
+    transmission_profile_directory: "<<data_path>>/transmission"
+    stokes_normalization: 50000.0
+    instrument_id: HMI
+    line_id: fe-i-6173
+    sample_idx: 0
+    resolution: [256, 256]
+  ref_time: null
+
+instrument:
+  - type: hmi
+    instrument_id: HMI
+    limb_correction: false
+    velocity_correction: false
+    artifact_correction: false
+    line_id: fe-i-6173
+
+model:
+  type: mlp
+  dim: 128
+  n_layers: 4
+  vector_potential: false
+  activation: swish
+  encoding_config:
+    type: fourier
+    num_frequencies: [8, 8, 8, 4]
+    max_frequencies: [64, 64, 64, 4]
+  b_sinh_scale: 10
+  v_sinh_scale: 1
+
+training:
+  plot_validation: true
+  epochs: -1
+  max_steps: 1000
+  check_val_every_n_epoch: null
+  val_check_interval: 1000
+  lr_params: {start: 0.001, end: 0.0001, iterations: 1000}
+  optimizer_config: {type: soap}
+
+normalization:
+  asinh_alphas: {Q: 0.01, U: 0.01, V: 0.01}
+
+stokes_loss:
+  type: mse
+  continuum_normalization: true
+  continuum_quantile: 0.9
+
+weights: {I: 1.0, Q: 1.0, U: 1.0, V: 1.0}
+
+logging:
+  project: spinnme
+  name: hmi-full-disk
+  mode: disabled

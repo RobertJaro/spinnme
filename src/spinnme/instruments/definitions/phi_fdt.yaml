@@ -1,0 +1,18 @@
+name: SO/PHI-FDT
+instrument_id: phi_fdt
+line_id: fe-i-6173
+type: phi
+wavelength_unit: Angstrom
+wavelength_center: 6173.341
+wavelength_grid: null
+wavelength_source: WAVELNnn
+stokes_order: IQUV
+time_reference: observation
+artifact_correction: false
+# Nominal single-order response, not acquisition-specific calibration.
+spectral_response:
+  type: airy
+  unit: Angstrom
+  fwhm: 0.106
+  free_spectral_range: 3.01
+  samples: 161

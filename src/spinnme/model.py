@@ -1,0 +1,546 @@
+from collections.abc import Iterable
+from copy import deepcopy
+import math
+
+import torch
+import torch.nn.functional as F
+from torch import nn
+
+
+def _per_dimension(value, in_dim, name, cast):
+    values = list(value) if isinstance(value, Iterable) and not isinstance(value, (str, bytes)) \
+        else [value] * in_dim
+    if len(values) != in_dim:
+        raise ValueError(f'{name} must contain one value per input dimension ({in_dim}); got {values}.')
+    return [cast(item) for item in values]
+
+
+class FourierEncoding(nn.Module):
+    """Deterministic, coordinate-wise multiresolution Fourier features."""
+
+    def __init__(self, in_dim, num_frequencies=None, max_frequencies=None,
+                 min_frequency=1.0, include_input=True):
+        super().__init__()
+        if num_frequencies is None:
+            num_frequencies = [*([64] * (in_dim - 1)), 8] if in_dim == 4 else 64
+        if max_frequencies is None:
+            max_frequencies = [*([2048] * (in_dim - 1)), 2] if in_dim == 4 else 2048
+
+        counts = _per_dimension(num_frequencies, in_dim, 'num_frequencies', int)
+        maxima = _per_dimension(max_frequencies, in_dim, 'max_frequencies', float)
+        minima = _per_dimension(min_frequency, in_dim, 'min_frequency', float)
+        if any(count < 0 for count in counts):
+            raise ValueError('num_frequencies cannot be negative.')
+
+        frequencies = []
+        for count, minimum, maximum in zip(counts, minima, maxima):
+            if count == 0:
+                values = torch.empty(0, dtype=torch.float32)
+            elif minimum <= 0 or maximum < minimum:
+                raise ValueError('Fourier frequencies require 0 < min_frequency <= max_frequencies.')
+            elif count == 1:
+                values = torch.tensor([maximum], dtype=torch.float32)
+            else:
+                values = 2 ** torch.linspace(
+                    torch.log2(torch.tensor(minimum)),
+                    torch.log2(torch.tensor(maximum)),
+                    count,
+                    dtype=torch.float32,
+                )
+            frequencies.append(nn.Parameter(values, requires_grad=False))
+
+        self.frequencies = nn.ParameterList(frequencies)
+        self.include_input = bool(include_input)
+        self.out_dim = (in_dim if self.include_input else 0) + 2 * sum(counts)
+
+    def forward(self, coords):
+        features = [coords] if self.include_input else []
+        for coordinate, frequencies in zip(coords.unbind(dim=-1), self.frequencies):
+            if frequencies.numel() == 0:
+                continue
+            phase = torch.pi * coordinate[..., None] * frequencies
+            features.extend((torch.sin(phase), torch.cos(phase)))
+        return torch.cat(features, dim=-1)
+
+
+class GaussianFourierEncoding(nn.Module):
+    """Tancik et al. reference code: [sin((2 pi x) B^T), cos((2 pi x) B^T)].
+
+    B is sampled once from N(0, sigma^2) and stored as a fixed buffer.
+    A sequence of scales supports different bandwidths per coordinate.
+    """
+
+    def __init__(self, in_dim, num_frequencies=256, scale=10.0,
+                 include_input=False, seed=None):
+        super().__init__()
+        if not isinstance(in_dim, int) or in_dim < 1:
+            raise ValueError('in_dim must be a positive integer.')
+        if not isinstance(num_frequencies, int) or num_frequencies < 1:
+            raise ValueError('num_frequencies must be a positive integer.')
+        scales = torch.tensor(_per_dimension(scale, in_dim, 'scale', float))
+        if not torch.isfinite(scales).all() or (scales <= 0).any():
+            raise ValueError('scale must be finite and positive.')
+        generator = None if seed is None else torch.Generator().manual_seed(seed)
+        self.register_buffer('B', torch.randn(num_frequencies, in_dim,
+                                              generator=generator) * scales)
+        self.include_input = bool(include_input)
+        self.out_dim = 2 * num_frequencies + (in_dim if self.include_input else 0)
+
+    def forward(self, coords):
+        if coords.shape[-1] != self.B.shape[1]:
+            raise ValueError(f'Expected {self.B.shape[1]} input coordinates.')
+        phase = (2 * torch.pi * coords) @ self.B.T
+        features = [torch.sin(phase), torch.cos(phase)]
+        if self.include_input:
+            features.insert(0, coords)
+        return torch.cat(features, dim=-1)
+
+
+class IsotropicPositionalEncoding(nn.Module):
+    """SuNeRF spatial Fourier features for [x, y, z, time].
+
+    Frequency settings contain one entry for space, then one per remaining
+    nonspatial axis. Bounds are base-2 exponents; phases include pi.
+    Spatial directions are sampled once, uniformly on the sphere, and saved.
+    """
+
+    def __init__(self, in_dim, num_frequencies=32, min_frequencies=0,
+                 max_frequencies=6, spatial_dim=3, include_input=False, seed=None):
+        super().__init__()
+        if not isinstance(spatial_dim, int) or not 1 <= spatial_dim <= in_dim:
+            raise ValueError('spatial_dim must be an integer between 1 and in_dim.')
+        n_other = in_dim - spatial_dim
+        n_blocks = 1 + n_other
+        counts = _per_dimension(num_frequencies, n_blocks, 'num_frequencies', int)
+        minima = _per_dimension(min_frequencies, n_blocks, 'min_frequencies', float)
+        maxima = _per_dimension(max_frequencies, n_blocks, 'max_frequencies', float)
+        if any(count < 1 for count in counts):
+            raise ValueError('num_frequencies must be positive.')
+        if any(not math.isfinite(lo) or not math.isfinite(hi) or hi < lo
+               for lo, hi in zip(minima, maxima)):
+            raise ValueError('Frequency exponents must be finite with min <= max.')
+        ladders = [2 ** torch.linspace(lo, hi, count) * torch.pi
+                   for count, lo, hi in zip(counts, minima, maxima)]
+        generator = None if seed is None else torch.Generator().manual_seed(seed)
+        directions = torch.randn(counts[0], spatial_dim, generator=generator)
+        directions = F.normalize(directions, dim=-1)
+        self.register_buffer('B', ladders[0][:, None] * directions)
+        self.frequencies = nn.ParameterList(
+            nn.Parameter(ladder, requires_grad=False) for ladder in ladders[1:]
+        )
+        self.in_dim = in_dim
+        self.spatial_dim = spatial_dim
+        self.include_input = bool(include_input)
+        self.out_dim = 2 * sum(counts) + (in_dim if self.include_input else 0)
+
+    def forward(self, coords):
+        if coords.shape[-1] != self.in_dim:
+            raise ValueError(f'Expected {self.in_dim} input coordinates.')
+        phase = F.linear(coords[..., :self.spatial_dim], self.B)
+        features = [coords] if self.include_input else []
+        features.extend((phase.sin(), phase.cos()))
+        for i, frequencies in enumerate(self.frequencies):
+            phase = coords[..., self.spatial_dim + i:self.spatial_dim + i + 1] * frequencies
+            features.extend((phase.sin(), phase.cos()))
+        return torch.cat(features, dim=-1)
+
+
+class Swish(nn.Module):
+    """Element-wise Swish activation with fixed beta=1."""
+
+    def forward(self, x):
+        return x * torch.sigmoid(x)
+
+
+class MLPModel(nn.Module):
+    """Coordinate MLP with configurable input encoding."""
+
+    def __init__(self, in_dim, out_dim, dim=256, n_layers=6,
+                 encoding_config=None, activation='silu'):
+        super().__init__()
+        if n_layers < 1:
+            raise ValueError('n_layers must be at least one.')
+
+        encoding_config = deepcopy(encoding_config) if encoding_config is not None else {}
+        encoding_type = encoding_config.pop('type', 'fourier').lower()
+        if encoding_type == 'fourier':
+            self.encoding = FourierEncoding(in_dim, **encoding_config)
+            encoded_dim = self.encoding.out_dim
+        elif encoding_type == 'gaussian':
+            self.encoding = GaussianFourierEncoding(in_dim, **encoding_config)
+            encoded_dim = self.encoding.out_dim
+        elif encoding_type == 'positional_isotropic':
+            self.encoding = IsotropicPositionalEncoding(in_dim, **encoding_config)
+            encoded_dim = self.encoding.out_dim
+        elif encoding_type in ('identity', 'none'):
+            if encoding_config:
+                raise TypeError(f'Identity encoding does not accept options: {sorted(encoding_config)}')
+            self.encoding = nn.Identity()
+            encoded_dim = in_dim
+        else:
+            raise ValueError(f'Unknown MLP encoding: {encoding_type!r}.')
+
+        activations = {
+            'swish': Swish,
+            'silu': nn.SiLU,
+            'relu': nn.ReLU,
+            'gelu': nn.GELU,
+            'tanh': nn.Tanh,
+        }
+        try:
+            activation_class = activations[activation.lower()]
+        except KeyError as error:
+            raise ValueError(f'Unknown MLP activation: {activation!r}.') from error
+
+        self.in_layer = nn.Linear(encoded_dim, dim)
+        self.hidden_layers = nn.ModuleList(nn.Linear(dim, dim) for _ in range(n_layers - 1))
+        self.activations = nn.ModuleList(activation_class() for _ in range(n_layers))
+        self.out_layer = nn.Linear(dim, out_dim)
+
+    def features(self, coords):
+        """Return the shared coordinate representation."""
+        x = self.activations[0](self.in_layer(self.encoding(coords)))
+        for layer, activation in zip(self.hidden_layers, self.activations[1:]):
+            x = activation(layer(x))
+        return x
+
+    def forward(self, coords):
+        return self.out_layer(self.features(coords))
+
+
+class SineLayer(nn.Module):
+    """SIREN layer with the initialization from Sitzmann et al. (2020)."""
+
+    def __init__(self, in_dim, out_dim, omega_0=1.0, is_first=False):
+        super().__init__()
+        if omega_0 <= 0:
+            raise ValueError('SIREN omega_0 must be positive.')
+        self.omega_0 = float(omega_0)
+        self.linear = nn.Linear(in_dim, out_dim)
+        bound = 1 / in_dim if is_first else math.sqrt(6 / in_dim) / self.omega_0
+        with torch.no_grad():
+            self.linear.weight.uniform_(-bound, bound)
+            self.linear.bias.uniform_(-bound, bound)
+
+    def forward(self, x):
+        return torch.sin(self.omega_0 * self.linear(x))
+
+
+class SirenModel(nn.Module):
+    """SIREN with independent angular input frequencies per coordinate."""
+
+    def __init__(self, in_dim, out_dim, dim=256, n_layers=8,
+                 input_omegas=None, hidden_omega_0=1.0,
+                 output_init_scale=1.0):
+        super().__init__()
+        if n_layers < 1:
+            raise ValueError('n_layers must be at least one.')
+        if hidden_omega_0 <= 0:
+            raise ValueError('SIREN hidden_omega_0 must be positive.')
+        if output_init_scale <= 0:
+            raise ValueError('SIREN output_init_scale must be positive.')
+        if input_omegas is None:
+            input_omegas = [30.0] * in_dim
+        input_omegas = torch.tensor(
+            _per_dimension(input_omegas, in_dim, 'input_omegas', float), dtype=torch.float32
+        )
+        if torch.any(input_omegas <= 0):
+            raise ValueError('SIREN input_omegas must be positive.')
+        self.register_buffer('input_omegas', input_omegas)
+
+        self.in_layer = SineLayer(in_dim, dim, omega_0=1.0, is_first=True)
+        self.hidden_layers = nn.ModuleList(
+            SineLayer(dim, dim, omega_0=hidden_omega_0)
+            for _ in range(n_layers - 1)
+        )
+        self.out_layer = nn.Linear(dim, out_dim)
+        # The standard SIREN bound is appropriate for another sine layer, but
+        # is unnecessarily broad for physical outputs. Keep its dependence on
+        # the hidden frequency while allowing a smaller linear readout.
+        output_bound = (
+            math.sqrt(6 / dim) / float(hidden_omega_0) * float(output_init_scale)
+        )
+        with torch.no_grad():
+            self.out_layer.weight.uniform_(-output_bound, output_bound)
+            self.out_layer.bias.zero_()
+
+    def features(self, coords):
+        """Return the shared coordinate representation."""
+        x = self.in_layer(coords * self.input_omegas)
+        for layer in self.hidden_layers:
+            x = layer(x)
+        return x
+
+    def forward(self, coords):
+        return self.out_layer(self.features(coords))
+
+
+class _BaseMESphericalModel:
+
+    def __init__(self, vector_potential=False, b_sinh_scale=None, v_sinh_scale=None,
+                 source_function='independent', disambiguation=False):
+        if b_sinh_scale is not None and b_sinh_scale <= 0:
+            raise ValueError('b_sinh_scale must be positive or None.')
+        if v_sinh_scale is not None and v_sinh_scale <= 0:
+            raise ValueError('v_sinh_scale must be positive or None.')
+        if vector_potential and b_sinh_scale is not None:
+            raise ValueError(
+                'b_sinh_scale cannot be used with vector_potential because a nonlinear '
+                'post-curl mapping would no longer guarantee a divergence-free field.'
+            )
+        if source_function not in ('independent', 'ratio'):
+            raise ValueError('source_function must be independent or ratio.')
+        if not isinstance(disambiguation, bool):
+            raise ValueError('disambiguation must be a boolean.')
+        self.disambiguation = disambiguation
+        self.source_function = source_function
+        self.vector_potential = vector_potential
+        self.b_sinh_scale = b_sinh_scale
+        self.v_sinh_scale = v_sinh_scale
+
+    def _initialize_disambiguation_output(self):
+        """Initialize the linear angle readout around 0.5 radians.
+
+        Calibrate only this output row on a unit shell. This compensates for
+        near-constant initial features in deep MLPs, without a fixed phase,
+        extra coordinate encoding, or activation on the learned output.
+        """
+        if not self.disambiguation:
+            return
+        with torch.no_grad():
+            unit = torch.quasirandom.SobolEngine(4).draw(1024)
+            longitude = 2 * torch.pi * unit[:, 0]
+            sin_latitude = 2 * unit[:, 1] - 1
+            cos_latitude = torch.sqrt(1 - sin_latitude.square())
+            radius = 1 + .1 * unit[:, 2]
+            coords = torch.stack((radius * cos_latitude * longitude.cos(),
+                                  radius * cos_latitude * longitude.sin(),
+                                  radius * sin_latitude, unit[:, 3]), dim=-1)
+            features = self.features(coords)
+            weight = self.out_layer.weight[-1:]
+            values = F.linear(features, weight)
+            # A uniform [0,1] readout has std=1/sqrt(12). The output remains
+            # unbounded, so individual initial values can exceed that range.
+            weight.mul_((1 / math.sqrt(12)) / values.std(unbiased=False).clamp_min(1e-8))
+            self.out_layer.bias[-1] = .5 - F.linear(features, weight).mean()
+
+    def _scale_magnetic_vector(self, b):
+        if self.b_sinh_scale is None:
+            return b
+        return torch.sinh(b) * float(self.b_sinh_scale)
+
+    def _scale_velocity_vector(self, v):
+        if self.v_sinh_scale is None:
+            return v
+        return torch.sinh(v) * float(self.v_sinh_scale)
+
+    def _decode_output(self, params, x):
+        ratio_source = self.source_function == 'ratio'
+        n_atmosphere_outputs = 10 if ratio_source else 11
+        n_outputs = n_atmosphere_outputs + int(self.disambiguation)
+        if params.shape[-1] != n_outputs:
+            raise RuntimeError(
+                f'Expected {n_outputs} spherical atmosphere outputs, '
+                f'received {params.shape[-1]}.'
+            )
+        if self.vector_potential:
+            a = params[..., 0:3]
+            a_jac_matrix = jacobian(a, x)
+            dAy_dx = a_jac_matrix[:, 1, 0]
+            dAz_dx = a_jac_matrix[:, 2, 0]
+            dAx_dy = a_jac_matrix[:, 0, 1]
+            dAz_dy = a_jac_matrix[:, 2, 1]
+            dAx_dz = a_jac_matrix[:, 0, 2]
+            dAy_dz = a_jac_matrix[:, 1, 2]
+            b_x = (dAz_dy - dAy_dz)[..., None]
+            b_y = (dAx_dz - dAz_dx)[..., None]
+            b_z = (dAy_dx - dAx_dy)[..., None]
+        else:
+            b = self._scale_magnetic_vector(params[..., 0:3])
+            b_x, b_y, b_z = b.split(1, dim=-1)
+            a_jac_matrix = None
+
+        b1 = torch.sigmoid(params[..., 5:6] if ratio_source else params[..., 6:7])
+        b0 = 1 - b1 if ratio_source else torch.sigmoid(params[..., 5:6])
+        velocity_start = 6 if ratio_source else 7
+        v = self._scale_velocity_vector(params[..., velocity_start:velocity_start + 3])
+        output = {
+            'b_x': b_x,
+            'b_y': b_y,
+            'b_z': b_z,
+            'vmac': F.softplus(params[..., 3:4]) * 1000.0,
+            'damping': torch.sigmoid(params[..., 4:5]),
+            'b0': b0,
+            'b1': b1,
+            'v_x': v[..., 0:1],
+            'v_y': v[..., 1:2],
+            'v_z': v[..., 2:3],
+            'kl': 1e-3 + F.softplus(params[..., n_atmosphere_outputs - 1:n_atmosphere_outputs]),
+            'a_jac_matrix': a_jac_matrix,
+        }
+        if self.disambiguation:
+            output['disambiguation_angle'] = params[..., n_atmosphere_outputs:n_outputs]
+        return output
+
+
+class _LineAtmospheres:
+    """Line-specific nuisance readouts over one shared magnetic/velocity trunk.
+
+    A single spectral line keeps the original numerical parameterization. When
+    multiple line identifiers are configured, each has its own thermodynamic
+    readout; magnetic and velocity outputs always use the shared readout.
+    """
+
+    def _configure_line_heads(self, line_ids=None, instrument_lines=None):
+        self.line_ids = tuple(dict.fromkeys(line_ids or ()))
+        self.instrument_lines = dict(instrument_lines or {})
+        if any(not isinstance(key, str) or not key or '.' in key for key in self.line_ids):
+            raise ValueError('Line identifiers must be nonempty strings without dots.')
+        self.line_heads = nn.ModuleDict()
+        self._nuisance_columns = (3, 4, 5, 9) if self.source_function == 'ratio' else (3, 4, 5, 6, 10)
+        if len(self.line_ids) > 1:
+            for line in self.line_ids:
+                head = nn.Linear(self.out_layer.in_features, len(self._nuisance_columns))
+                with torch.no_grad():
+                    head.weight.copy_(self.out_layer.weight[list(self._nuisance_columns)])
+                    head.bias.copy_(self.out_layer.bias[list(self._nuisance_columns)])
+                self.line_heads[line] = head
+
+    def _line_forward(self, coords, instrument_id=None, line_id=None):
+        if instrument_id is not None:
+            if instrument_id not in self.instrument_lines:
+                raise KeyError(f'Unknown instrument {instrument_id!r}.')
+            selected = self.instrument_lines[instrument_id]
+            if line_id is not None and line_id != selected:
+                raise ValueError('instrument_id and line_id select different spectral lines.')
+            line_id = selected
+        if line_id is None and self.line_ids:
+            line_id = self.line_ids[0]
+        if line_id is not None and line_id not in self.line_ids:
+            raise KeyError(f'Unknown spectral line {line_id!r}; available: {self.line_ids}.')
+        features = self.features(coords)
+        params = self.out_layer(features)
+        if self.line_heads:
+            params = params.clone()
+            params[..., list(self._nuisance_columns)] = self.line_heads[line_id](features)
+        return self._decode_output(params, coords)
+
+
+class MESphericalModel(MLPModel, _BaseMESphericalModel, _LineAtmospheres):
+
+    def __init__(self, vector_potential=False, b_sinh_scale=None,
+                 v_sinh_scale=None, source_function='independent', line_ids=None,
+                 instrument_lines=None, disambiguation=False, **kwargs):
+        _BaseMESphericalModel.__init__(
+            self, vector_potential=vector_potential,
+            b_sinh_scale=b_sinh_scale, v_sinh_scale=v_sinh_scale,
+            source_function=source_function, disambiguation=disambiguation,
+        )
+        MLPModel.__init__(self, in_dim=4, out_dim=(10 if source_function == 'ratio' else 11) + int(disambiguation), **kwargs)
+        self._configure_line_heads(line_ids, instrument_lines)
+        self._initialize_disambiguation_output()
+
+    def forward(self, x, instrument_id=None, line_id=None):
+        return self._line_forward(x, instrument_id=instrument_id, line_id=line_id)
+
+
+class MESphericalSirenModel(SirenModel, _BaseMESphericalModel, _LineAtmospheres):
+
+    def __init__(self, vector_potential=False, b_sinh_scale=None,
+                 v_sinh_scale=None, source_function='independent', line_ids=None,
+                 instrument_lines=None, disambiguation=False, **kwargs):
+        _BaseMESphericalModel.__init__(
+            self, vector_potential=vector_potential,
+            b_sinh_scale=b_sinh_scale, v_sinh_scale=v_sinh_scale,
+            source_function=source_function, disambiguation=disambiguation,
+        )
+        SirenModel.__init__(self, in_dim=4, out_dim=(10 if source_function == 'ratio' else 11) + int(disambiguation), **kwargs)
+        self._configure_line_heads(line_ids, instrument_lines)
+        self._initialize_disambiguation_output()
+
+    def forward(self, x, instrument_id=None, line_id=None):
+        return self._line_forward(x, instrument_id=instrument_id, line_id=line_id)
+
+
+def jacobian(output, coords):
+    jac_matrix = [torch.autograd.grad(output[:, i], coords,
+                                      grad_outputs=torch.ones_like(output[:, i]).to(output),
+                                      retain_graph=True, create_graph=True, allow_unused=True)[0]
+                  for i in range(output.shape[1])]
+    return torch.stack(jac_matrix, dim=1)
+
+
+class NormalizationModule(nn.Module):
+
+    def __init__(self, asinh_alphas=None, stokes_scales=None):
+        super().__init__()
+
+        if stokes_scales is not None:
+            if asinh_alphas is not None:
+                raise ValueError('Use either stokes_scales or asinh_alphas, not both.')
+            if isinstance(stokes_scales, dict):
+                stokes_scales = [stokes_scales[k] for k in ('I', 'Q', 'U', 'V')]
+            stokes_scales = torch.as_tensor(stokes_scales, dtype=torch.float32)
+            if (stokes_scales.numel() != 4 or not torch.isfinite(stokes_scales).all()
+                    or not (stokes_scales > 0).all()):
+                raise ValueError('stokes_scales must contain four finite positive I/Q/U/V scales.')
+            stokes_scales = stokes_scales.reshape(4, 1)
+        self.register_buffer('stokes_scales', stokes_scales)
+
+        if isinstance(asinh_alphas, dict):
+            asinh_alphas = [asinh_alphas[k] for k in ('Q', 'U', 'V')]
+        elif isinstance(asinh_alphas, (float, int)):
+            asinh_alphas = [asinh_alphas] * 3
+
+        if asinh_alphas is not None:
+            if len(asinh_alphas) != 3:
+                raise ValueError('asinh_alphas must contain the Q, U, and V transition scales')
+            if any(not math.isfinite(alpha) or alpha <= 0 for alpha in asinh_alphas):
+                raise ValueError('asinh_alphas must be finite and strictly positive')
+            asinh_alphas = torch.tensor(asinh_alphas, dtype=torch.float32).reshape(1, 3, 1)
+
+        self.register_buffer('asinh_alphas', asinh_alphas)
+
+    def forward(self, stokes):
+        if self.stokes_scales is not None:
+            return stokes / self.stokes_scales
+        stokes_i = stokes[..., 0:1, :]
+        stokes_q = stokes[..., 1:2, :]
+        stokes_u = stokes[..., 2:3, :]
+        stokes_v = stokes[..., 3:4, :]
+
+        if self.asinh_alphas is not None:
+            polarization = torch.cat([stokes_q, stokes_u, stokes_v], dim=-2)
+            polarization = torch.asinh(polarization / self.asinh_alphas) / torch.asinh(1 / self.asinh_alphas)
+            stokes_q, stokes_u, stokes_v = polarization.split(1, dim=-2)
+
+        return torch.cat([stokes_i, stokes_q, stokes_u, stokes_v], dim=-2)
+
+
+class VelocityCorrectionModel(MLPModel):
+
+    def __init__(self, **kwargs):
+        super().__init__(in_dim=1, out_dim=1, dim=16, n_layers=3,
+                         encoding_config={'type': 'identity'}, **kwargs)
+
+    def forward(self, x):
+        return super().forward(x) * 1e3
+
+
+class LimbCorrectionModel(MLPModel):
+
+    def __init__(self, **kwargs):
+        super().__init__(in_dim=1, out_dim=4, dim=16, n_layers=3,
+                         encoding_config={'type': 'identity'}, **kwargs)
+        with torch.no_grad():
+            self.out_layer.weight[3].zero_()
+            self.out_layer.bias[3] = torch.logit(torch.tensor(0.99))
+
+    def forward(self, mu):
+        x = super().forward(mu)
+        return {
+            'c_b0': torch.sigmoid(x[..., 0:1]),
+            'c_b1': torch.sigmoid(x[..., 1:2]),
+            'c_vdop': x[..., 2:3] * 100,
+            'filling_factor': torch.sigmoid(x[..., 3:4]),
+        }
