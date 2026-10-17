@@ -26,9 +26,10 @@ import hashlib
 import json
 import os
 import tempfile
+from collections.abc import Iterable, Mapping
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any
 
 try:
     import drms
@@ -39,7 +40,6 @@ from astropy.io import fits
 from dateutil.parser import parse
 
 from spinnme.instrument import HMI_WAVELENGTH_GRID
-
 
 HMI_ME_SERIES = "hmi.ME_720s_fd10"
 HMI_PHASE_SERIES = "hmi.phasemaps_extended"
@@ -254,7 +254,7 @@ def resolve_hmi_phase_map(
     client: drms.Client,
     observation_time: str | datetime,
     hcamid: int,
-    phase_map_fsn: Optional[int] = None,
+    phase_map_fsn: int | None = None,
 ) -> dict[str, Any]:
     """Resolve the exact phase-map record used for an HMI Stokes record."""
     jsoc_time = format_jsoc_time(observation_time)
@@ -341,7 +341,7 @@ def build_hmi_transmission_profiles(
     blocker_tail_sigma: float = DEFAULT_BLOCKER_TAIL_SIGMA,
     continuum_panel_width: float = DEFAULT_CONTINUUM_PANEL_WIDTH,
     continuum_panel_nodes: int = DEFAULT_CONTINUUM_PANEL_NODES,
-    contrasts: Optional[np.ndarray] = None,
+    contrasts: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
     """Construct six quadrature-ready HMI transmission profiles.
 
@@ -584,7 +584,7 @@ def prepare_hmi_transmission_directory(
     continuum_panel_width: float = DEFAULT_CONTINUUM_PANEL_WIDTH,
     continuum_panel_nodes: int = DEFAULT_CONTINUUM_PANEL_NODES,
     overwrite: bool = False,
-    client: Optional[drms.Client] = None,
+    client: drms.Client | None = None,
 ) -> Path:
     """Prepare every unique calibration used by a FITS series and a manifest."""
     if not email:

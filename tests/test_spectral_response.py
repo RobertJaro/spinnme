@@ -4,10 +4,10 @@ import copy
 import numpy as np
 import pytest
 import torch
+from _training_helpers import physical_inputs
 from astropy import units as u
 from scipy.integrate import trapezoid
 
-from _training_helpers import physical_inputs
 from spinnme.instrument import hmi_wavelength_config
 from spinnme.train.me_atmosphere import PHIMEAtmosphere
 from spinnme.train.me_spherical_module import MESphericalModule

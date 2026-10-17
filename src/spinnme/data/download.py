@@ -1,4 +1,5 @@
 """Unified explicit download dispatch used by the public CLI."""
+from datetime import UTC
 
 
 def _dispatch(source, *, output, start=None, end=None, email=None, product=None,
@@ -7,9 +8,9 @@ def _dispatch(source, *, output, start=None, end=None, email=None, product=None,
     """Download HMI or PHI data; importing this module is offline."""
     source = source.lower()
     if urls:
-        from pathlib import Path
         import shutil
-        from urllib.parse import urlparse, unquote
+        from pathlib import Path
+        from urllib.parse import unquote, urlparse
         from urllib.request import urlopen
         directory = Path(output)
         directory.mkdir(parents=True, exist_ok=True)
@@ -67,16 +68,17 @@ def download(source, *, output, start=None, end=None, email=None, product=None,
     """
     import hashlib
     import json
+    from datetime import datetime
     from pathlib import Path
-    from datetime import datetime, timezone
+
     from astropy.io import fits
     directory = Path(output).resolve()
     directory.mkdir(parents=True, exist_ok=True)
     manifest_path = directory / 'download-manifest.json'
-    request = dict(source=source, start=str(start) if start is not None else None,
-                   end=str(end) if end is not None else None, product=product,
-                   telescope=telescope, cadence=cadence, series=series, segments=segments,
-                   time_scale=time_scale, level=level, urls=list(urls or []))
+    request = {"source": source, "start": str(start) if start is not None else None,
+                   "end": str(end) if end is not None else None, "product": product,
+                   "telescope": telescope, "cadence": cadence, "series": series, "segments": segments,
+                   "time_scale": time_scale, "level": level, "urls": list(urls or [])}
     request = json.loads(json.dumps(request, default=str))
     # The email address is operational JSOC authentication metadata, not a
     # scientific input and does not need to be distributed with the collection.
@@ -134,12 +136,12 @@ def download(source, *, output, start=None, end=None, email=None, product=None,
             with fits.open(path, memmap=False) as hdus:
                 for hdu in hdus:
                     metadata.update({key:hdu.header[key] for key in keys if key in hdu.header})
-        records.append(dict(path=str(path.relative_to(directory)), bytes=path.stat().st_size,
-                            sha256=digest(path), metadata=metadata))
+        records.append({"path": str(path.relative_to(directory)), "bytes": path.stat().st_size,
+                            "sha256": digest(path), "metadata": metadata})
     if not records:
         raise ValueError('The archive returned no downloaded files.')
-    manifest = dict(schema_version=1, created=datetime.now(timezone.utc).isoformat(),
-                    request=request, files=records)
+    manifest = {"schema_version": 1, "created": datetime.now(UTC).isoformat(),
+                    "request": request, "files": records}
     temporary = manifest_path.with_suffix('.json.partial')
     temporary.write_text(json.dumps(manifest, indent=2, default=str)+'\n')
     temporary.replace(manifest_path)

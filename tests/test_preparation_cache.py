@@ -3,19 +3,19 @@ import random
 from pathlib import Path
 
 import numpy as np
-import torch
 import pytest
+import torch
 from astropy.io import fits
+from test_fits_observations import cube
 
 from spinnme.data.cache import load_or_prepare_data_module
-from test_fits_observations import cube
 
 
 def configuration(path):
-    dataset=dict(type='fits',data_path=str(path),instrument_id='A',
-                 axis_order=['stokes','wavelength','y','x'],line_id='fe-i-6173')
-    return dict(train_configs=[dataset],valid_config={**dataset,'sample_idx':0},
-                batch_size=8,dataset_batch_size=4,num_workers=0,num_dataset_workers=0)
+    dataset={'type': 'fits','data_path': str(path),'instrument_id': 'A',
+                 'axis_order': ['stokes','wavelength','y','x'],'line_id': 'fe-i-6173'}
+    return {'train_configs': [dataset],'valid_config': {**dataset,'sample_idx':0},
+                'batch_size': 8,'dataset_batch_size': 4,'num_workers': 0,'num_dataset_workers': 0}
 
 
 def paths(module):
@@ -56,7 +56,7 @@ def test_prep_then_run_reuses_same_arrays_and_preserves_rng(tmp_path, capsys):
 
 
 def test_rerun_skips_restore_and_explicit_reload_rebuilds(tmp_path, monkeypatch):
-    import spinnme.data.cache as cache
+    from spinnme.data import cache
 
     path, _ = cube(tmp_path)
     config = configuration(path)
@@ -76,7 +76,7 @@ def test_rerun_skips_restore_and_explicit_reload_rebuilds(tmp_path, monkeypatch)
 
 @pytest.mark.parametrize('rank', ['1', '2'])
 def test_other_ranks_restore_without_rebuilding_even_with_reload(tmp_path, monkeypatch, rank):
-    import spinnme.data.cache as cache
+    from spinnme.data import cache
 
     path, _ = cube(tmp_path)
     config = configuration(path)
@@ -97,7 +97,7 @@ def test_other_ranks_restore_without_rebuilding_even_with_reload(tmp_path, monke
 
 
 def test_follower_waits_instead_of_preparing_missing_cache(tmp_path, monkeypatch):
-    import spinnme.data.cache as cache
+    from spinnme.data import cache
 
     path, _ = cube(tmp_path)
     config = configuration(path)
@@ -114,7 +114,7 @@ def test_follower_waits_instead_of_preparing_missing_cache(tmp_path, monkeypatch
 
 @pytest.mark.parametrize('restore', [False, True])
 def test_cache_reuse_ignores_source_and_configuration_changes(tmp_path, restore):
-    import spinnme.data.cache as cache
+    from spinnme.data import cache
 
     path, _ = cube(tmp_path)
     config = configuration(path)
@@ -133,7 +133,7 @@ def test_cache_reuse_ignores_source_and_configuration_changes(tmp_path, restore)
 
 
 def test_restore_ignores_legacy_file_inventory_and_array_checks(tmp_path):
-    import spinnme.data.cache as cache
+    from spinnme.data import cache
 
     path, _ = cube(tmp_path)
     config = configuration(path)
@@ -166,7 +166,7 @@ def test_preparation_seed_changes_cache_and_is_deterministic(tmp_path):
 
 
 def test_generic_solar_projection_survives_safe_cache_restore(tmp_path):
-    import spinnme.data.cache as cache
+    from spinnme.data import cache
     path,_=cube(tmp_path)
     with fits.open(path,mode='update') as hs:
         hs[0].header['CTYPE1']='HPLN-SIN'

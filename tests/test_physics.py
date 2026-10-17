@@ -3,13 +3,12 @@ import math
 import pytest
 import torch
 
-import spinnme.train.physics as physics
+from spinnme.train import physics
 from spinnme.train.physics import (
-    PhysicsConstraintModule,
     PhysicsCharacteristicScales,
+    PhysicsConstraintModule,
     PhysicsWeightSchedule,
 )
-
 
 DTYPE = torch.float64
 

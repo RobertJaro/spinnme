@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import copy
-from datetime import datetime, timezone
-from importlib import metadata
 import json
 import os
-from pathlib import Path
 import platform
 import subprocess
 import time
+from datetime import UTC, datetime
+from importlib import metadata
+from pathlib import Path
 
 import torch
 from pytorch_lightning import Trainer
@@ -20,7 +20,6 @@ from pytorch_lightning.utilities import rank_zero_only
 from spinnme.data.cache import load_or_prepare_data_module
 from spinnme.train.me_spherical_module import MESphericalModule
 from spinnme.train.physics_regularization import build_spherical_collocation_domain, split_stokes_and_physics_config
-
 
 TRAINER_OPTIONS = {
     'accelerator', 'devices', 'num_nodes', 'precision', 'limit_train_batches',
@@ -49,7 +48,7 @@ def _logger(configuration, directory):
         raise ImportError('Install spinnme[wandb] to enable Weights & Biases logging.') from error
     logger = WandbLogger(save_dir=str(directory), offline=mode == 'offline', **configuration)
     # Initialize before data preparation, whose diagnostics use an active run.
-    logger.experiment
+    _ = logger.experiment
     return logger
 
 
@@ -86,7 +85,7 @@ def _environment():
 
 def _resume_configuration(config, resolved_path):
     """Compare scientific settings before replacing a run's resolved YAML."""
-    from spinnme.configuration import read_config, config_hash
+    from spinnme.configuration import config_hash, read_config
     if not resolved_path.is_file():
         raise FileNotFoundError(f'Cannot validate resume settings: {resolved_path} does not exist.')
     def scientific(configuration):
@@ -115,8 +114,8 @@ def run(config, resume=False, profile=False, reload=False):
     output directory. Logging is disabled unless explicitly configured. Returns
     ``(module, data_module, trainer)`` for callers that need in-memory results.
     """
+    from spinnme.configuration import config_hash, training_budget, write_config
     from spinnme.snapshots import save_snapshot
-    from spinnme.configuration import write_config, config_hash, training_budget
 
     config = copy.deepcopy(config)
     output = Path(config.get('path', config.get('output', 'results'))).expanduser()
@@ -139,7 +138,7 @@ def run(config, resume=False, profile=False, reload=False):
     started = time.perf_counter()
     manifest_path = output / 'run_manifest.json'
     manifest = {'schema_version': 1, 'status': 'preparing',
-                'started_utc': datetime.now(timezone.utc).isoformat(),
+                'started_utc': datetime.now(UTC).isoformat(),
                 'config_hash': config_hash(config),
                 'budget': {'epochs': epochs, 'max_steps': max_steps}, 'resume': bool(resume),
                 'environment': _environment(), 'inputs': []}
@@ -186,9 +185,9 @@ def run(config, resume=False, profile=False, reload=False):
             from spinnme.train.diagnostics import training_diagnostics
             profiler, monitor = training_diagnostics(str(output / 'profiling'))
             callbacks.append(monitor)
-        options = dict(accelerator='auto', devices='auto', num_sanity_val_steps=0,
-                       gradient_clip_val=.5, use_distributed_sampler=False,
-                       check_val_every_n_epoch=1)
+        options = {'accelerator': 'auto', 'devices': 'auto', 'num_sanity_val_steps': 0,
+                       'gradient_clip_val': .5, 'use_distributed_sampler': False,
+                       'check_val_every_n_epoch': 1}
         options.update(trainer_options)
         if options.get('check_val_every_n_epoch') is None and 'val_check_interval' not in options:
             raise ValueError('val_check_interval is required when check_val_every_n_epoch is null.')
@@ -205,12 +204,12 @@ def run(config, resume=False, profile=False, reload=False):
         # Lightning's strategy-aware save; final resume and inference state agree.
         trainer.save_checkpoint(str(checkpoint_path))
         persist()
-        manifest.update(status='complete', completed_utc=datetime.now(timezone.utc).isoformat(),
+        manifest.update(status='complete', completed_utc=datetime.now(UTC).isoformat(),
                         elapsed_seconds=time.perf_counter() - started, steps=int(trainer.global_step))
         _write_manifest(manifest_path, manifest)
         return module, data_module, trainer
     except BaseException as error:
-        manifest.update(status='failed', completed_utc=datetime.now(timezone.utc).isoformat(),
+        manifest.update(status='failed', completed_utc=datetime.now(UTC).isoformat(),
                         elapsed_seconds=time.perf_counter() - started,
                         error={'type': type(error).__name__, 'message': str(error)})
         _write_manifest(manifest_path, manifest)

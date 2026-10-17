@@ -1,5 +1,6 @@
 """Import-safe JSOC HMI downloads with explicit input time scales."""
 from pathlib import Path
+
 from astropy.time import Time
 
 

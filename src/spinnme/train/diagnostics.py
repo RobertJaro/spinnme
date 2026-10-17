@@ -2,11 +2,11 @@
 
 import json
 import os
-from pathlib import Path
 import shutil
 import socket
 import subprocess
 import time
+from pathlib import Path
 
 import torch
 from pytorch_lightning import Callback
@@ -81,11 +81,11 @@ class TraceWriter:
         stages = {}
         for name in ('train_dataloader_next', 'batch_to_device', 'training_step', 'backward', 'optimizer_step'):
             matches = [event for event in events if name in event.key and '[pl]' in event.key]
-            stages[name] = [dict(
-                name=e.key, calls=e.count, cpu_total_ms=e.cpu_time_total / 1000,
-                cpu_mean_ms=e.cpu_time_total / max(e.count, 1) / 1000,
-                device_total_ms=getattr(e, 'device_time_total', 0) / 1000,
-            ) for e in matches]
+            stages[name] = [{
+                'name': e.key, 'calls': e.count, 'cpu_total_ms': e.cpu_time_total / 1000,
+                'cpu_mean_ms': e.cpu_time_total / max(e.count, 1) / 1000,
+                'device_total_ms': getattr(e, 'device_time_total', 0) / 1000,
+            } for e in matches]
         (Path(str(stem) + '.summary.json')).write_text(json.dumps(stages, indent=2))
         report = [
             'Timing window: 20 active training batches after 10 skipped + 2 warm-up batches.',

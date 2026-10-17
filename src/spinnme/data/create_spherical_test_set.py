@@ -4,14 +4,13 @@ import os.path
 import numpy as np
 import torch
 from astropy import units as u
-from astropy.coordinates import SkyCoord, Angle
+from astropy.coordinates import Angle, SkyCoord
 from sunpy.coordinates import frames
-from sunpy.map import make_heliographic_header, Map, make_fitswcs_header, all_coordinates_from_map
+from sunpy.map import Map, all_coordinates_from_map, make_fitswcs_header, make_heliographic_header
 from sunpy.sun import constants
 
 from spinnme.data.circular_pattern import CircularPatternGenerator
-from spinnme.data.util import image_p_angle, image_to_spherical_matrix
-from spinnme.data.util import solar_differential_rotation_velocity
+from spinnme.data.util import image_p_angle, image_to_spherical_matrix, solar_differential_rotation_velocity
 
 
 def image_frame_inclination(b_img):

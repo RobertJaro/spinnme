@@ -1,6 +1,6 @@
 """Version-aware PHI Stokes ingestion through the generic FITS reader."""
-from astropy.io import fits
 from astropy import units as u
+from astropy.io import fits
 
 from .fits import read_fits_observation
 from .phi_util import phi_continuum_index

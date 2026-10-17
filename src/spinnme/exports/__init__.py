@@ -1,10 +1,10 @@
 """Named scientific products and format writers shared by CLI and Python callers."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
-from pathlib import Path
 import re
+from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 from astropy.io import fits
@@ -188,6 +188,7 @@ class EvaluationResult:
     def write_jpg(self, directory, *, overwrite=False, dpi=180, cmap=None):
         self._require_image()
         import matplotlib.pyplot as plt
+
         from ..plotting import magnetic_norm
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)

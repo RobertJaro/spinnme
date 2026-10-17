@@ -3,7 +3,6 @@
 import numpy as np
 from astropy import units as u
 
-
 HMI_WAVELENGTH_CENTER = 6173.3433 * u.AA
 
 # hmi.S_720s segments I0..I5 are stored from the red to the blue wing.
@@ -30,9 +29,9 @@ def hmi_wavelength_config():
 # Rest wavelengths and atomic constants use the same Fe I convention as the
 # existing scientific solver. Sampling and spectral response remain observations.
 SPECTRAL_LINES = {
-    'fe-i-6173': dict(wavelength_center=6173.3433 * u.AA, j_up=1., j_low=0., g_up=2.50, g_low=0.),
-    'fe-i-6301': dict(wavelength_center=6301.5012 * u.AA, j_up=2., j_low=2., g_up=1.50, g_low=1.8333333333333333),
-    'fe-i-6302': dict(wavelength_center=6302.4931 * u.AA, j_up=1., j_low=0., g_up=2.49, g_low=0.),
+    'fe-i-6173': {'wavelength_center': 6173.3433 * u.AA, 'j_up': 1., 'j_low': 0., 'g_up': 2.50, 'g_low': 0.},
+    'fe-i-6301': {'wavelength_center': 6301.5012 * u.AA, 'j_up': 2., 'j_low': 2., 'g_up': 1.50, 'g_low': 1.8333333333333333},
+    'fe-i-6302': {'wavelength_center': 6302.4931 * u.AA, 'j_up': 1., 'j_low': 0., 'g_up': 2.49, 'g_low': 0.},
 }
 
 
@@ -64,9 +63,9 @@ def resolve_instrument_line(instrument, wavelength_config):
         raise ValueError(f'Wavelength center {center} Angstrom does not match {line_id}.')
     if any(atomic[key] < 0 or not np.isclose(2 * atomic[key], round(2 * atomic[key])) for key in ('j_up', 'j_low')):
         raise ValueError('Atomic angular momenta must be nonnegative integer or half-integer values.')
-    if instrument_type in ('hmi', 'phi') and supplied is not None and preset is not None:
-        if any(not np.isclose(atomic[key], float(preset[key])) for key in required):
-            raise ValueError(f'{instrument_type} atomic parameters must match the bundled Fe I 6173 model.')
+    if (instrument_type in ('hmi', 'phi') and supplied is not None and preset is not None
+            and any(not np.isclose(atomic[key], float(preset[key])) for key in required)):
+        raise ValueError(f'{instrument_type} atomic parameters must match the bundled Fe I 6173 model.')
     if instrument_type in ('hmi', 'phi') and line_id != 'fe-i-6173':
         raise ValueError(f'{instrument_type} requires the Fe I 6173 line.')
     return line_id, atomic

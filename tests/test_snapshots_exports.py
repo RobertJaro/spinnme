@@ -1,6 +1,6 @@
+import json
 from datetime import datetime
 from types import SimpleNamespace
-import json
 
 import numpy as np
 import pytest
@@ -136,9 +136,9 @@ def test_reject_nonmapping_snapshot_payload(tmp_path, payload):
     {'mu_limit': True}, {'mu_limit': np.nan}, {'mu_limit': np.inf}, {'mu_limit': '0.1'},
 ])
 def test_invalid_snapshot_evaluation_controls_fail_before_geometry(saved_snapshot, options):
-    with spinnme.load(saved_snapshot[0], device='cpu') as snapshot:
-        with pytest.raises(ValueError, match='batch_size|mu_limit'):
-            snapshot.evaluate(parameters=['Br'], **options)
+    with (spinnme.load(saved_snapshot[0], device='cpu') as snapshot,
+          pytest.raises(ValueError, match='batch_size|mu_limit')):
+        snapshot.evaluate(parameters=['Br'], **options)
 
 
 def test_synthesis_numpy_pixels_without_artifact_model(saved_snapshot):
@@ -164,6 +164,7 @@ def test_external_grid_requires_explicit_observer_metadata(saved_snapshot, tmp_p
 
 def test_native_raster_times_masks_and_explicit_epoch(saved_snapshot, tmp_path):
     import base64
+
     from astropy.time import Time
     payload = torch.load(saved_snapshot[0], weights_only=True)
     metadata = json.loads(payload['metadata_json'])
@@ -236,7 +237,7 @@ def test_reference_metrics_match_and_wrap_angles(saved_snapshot):
 
 
 def test_fits_reference_units_and_observer_guard(saved_snapshot, tmp_path):
-    from spinnme.evaluation import read_reference, evaluate_result
+    from spinnme.evaluation import evaluate_result, read_reference
     with spinnme.load(saved_snapshot[0]) as snapshot:
         result = snapshot.evaluate(parameters=['Br'])
     header = result.header.copy()
@@ -252,7 +253,7 @@ def test_fits_reference_units_and_observer_guard(saved_snapshot, tmp_path):
 
 
 def test_fits_reference_preserves_independent_valid_mask(saved_snapshot, tmp_path):
-    from spinnme.evaluation import read_reference, evaluate_result
+    from spinnme.evaluation import evaluate_result, read_reference
     with spinnme.load(saved_snapshot[0]) as snapshot:
         result = snapshot.evaluate(parameters=['Br'])
     mask = result.mask.copy()
@@ -355,6 +356,7 @@ def test_public_grid_map_and_coordinate_interfaces_agree(saved_snapshot, tmp_pat
 
 def test_crop_preserves_native_scan_support_and_calibration(saved_snapshot):
     import base64
+
     from sunpy.map import Map
     with spinnme.load(saved_snapshot[0], device='cpu') as snapshot:
         row = snapshot.grid()

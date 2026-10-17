@@ -1,7 +1,8 @@
 """Sphinx configuration; the documentation build needs no GPU libraries."""
-from pathlib import Path
 import re
 import sys
+from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 project = "SPINNME"
 author = "Robert Jarolim"

@@ -1,6 +1,8 @@
 """CLI convenience API for the preserved spherical circular-pattern fixture."""
 from pathlib import Path
+
 from spinnme.configuration import write_config
+
 from .synthetic import generate_circular
 
 
@@ -8,9 +10,9 @@ def create_circular_dataset(output, size=32, frames=2):
     """Generate FITS observations and a directly runnable small YAML config."""
     directory = Path(output).resolve()
     generate_circular(directory, shape=(size,size), n_time_steps=frames)
-    dataset = dict(type='fits', data_path=str(directory/'circular_???.fits'),
-                   axis_order=['stokes','wavelength','y','x'], stokes_order='IQUV',
-                   stokes_normalization=1., instrument_id='CIRCULAR', line_id='fe-i-6173')
+    dataset = {'type': 'fits', 'data_path': str(directory/'circular_???.fits'),
+                   'axis_order': ['stokes','wavelength','y','x'], 'stokes_order': 'IQUV',
+                   'stokes_normalization': 1., 'instrument_id': 'CIRCULAR', 'line_id': 'fe-i-6173'}
     config = {'path':'<<run_path>>', 'work_path':'<<work_path>>',
               'data':{'train_configs':[dataset], 'valid_config':{**dataset,'sample_idx':0},
                       'ref_time':'2025-01-01T00:00:00', 'num_workers':0,'num_dataset_workers':0,

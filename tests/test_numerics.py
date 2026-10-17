@@ -3,10 +3,9 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from _training_helpers import _module, _physical_batch
 from pytorch_lightning import Trainer
 from torch.utils.data import DataLoader
-
-from _training_helpers import _module, _physical_batch
 
 
 def attach_report_directory(module, directory):

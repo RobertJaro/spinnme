@@ -1,14 +1,15 @@
-import copy
 import base64
+import copy
 import glob
 import os
 import re
+from collections.abc import Iterable
 from multiprocessing import get_context
-from typing import Iterable, Optional
 
 import numpy as np
 import torch
 import torch.nn.functional as F
+
 try:
     import wandb
 except ImportError:
@@ -21,26 +22,35 @@ from matplotlib import pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from pytorch_lightning import LightningDataModule
 from sunpy.coordinates import frames
-from sunpy.map import all_coordinates_from_map, Map
+from sunpy.map import Map, all_coordinates_from_map
 from torch.utils.data import DataLoader
 
-from spinnme.data.fits import (read_fits_observation, observation_header, observation_times,
-                              parse_time, observer_velocity_from_header)
-from spinnme.data.phi import read_phi_observation
+from spinnme.data.fits import (
+    observation_header,
+    observation_times,
+    observer_velocity_from_header,
+    parse_time,
+    read_fits_observation,
+)
+from spinnme.data.hmi_time import load_hmi_date_obs_map
 from spinnme.data.hmi_transmission import (
     load_hmi_transmission_profile,
     read_hmi_fits_acquisition,
     resolve_hmi_transmission_profile,
 )
-from spinnme.data.hmi_time import load_hmi_date_obs_map
-from spinnme.data.util import spherical_to_cartesian, cartesian_to_spherical_matrix, image_to_spherical_matrix, observer_ray_and_mu, image_p_angle
+from spinnme.data.phi import read_phi_observation
+from spinnme.data.util import (
+    cartesian_to_spherical_matrix,
+    image_p_angle,
+    image_to_spherical_matrix,
+    observer_ray_and_mu,
+    spherical_to_cartesian,
+)
 from spinnme.instrument import hmi_wavelength_config
-from spinnme.progress import progress
-from spinnme.loader.util import MultiprocessingWrapper
 from spinnme.loader.polarization import polarization_selection
-from spinnme.train.data_loader import TensorsDataset, CombinedDataset, TimeStratifiedBatchSampler
-
-
+from spinnme.loader.util import MultiprocessingWrapper
+from spinnme.progress import progress
+from spinnme.train.data_loader import CombinedDataset, TensorsDataset, TimeStratifiedBatchSampler
 
 
 def _summarize_physics_coordinates(spherical_coords):
@@ -96,8 +106,8 @@ class SphericalDataModule(LightningDataModule):
         self.ref_time, self.seconds_per_dt = ref_time, seconds_per_dt
         self.Rs_per_ds, self.gauss_per_dB = Rs_per_ds, gauss_per_dB
         self.train_config_indices, self.train_datasets = [], []
-        common = dict(seconds_per_dt=seconds_per_dt, Rs_per_ds=Rs_per_ds,
-                      ref_time=ref_time, work_directory=work_directory)
+        common = {'seconds_per_dt': seconds_per_dt, 'Rs_per_ds': Rs_per_ds,
+                      'ref_time': ref_time, 'work_directory': work_directory}
         for group, source_config in enumerate(configs):
             config = copy.deepcopy(source_config)
             ds_type = config.pop('type').lower()
@@ -109,7 +119,7 @@ class SphericalDataModule(LightningDataModule):
             normalization = config.pop('stokes_normalization', stokes_normalization)
             wrapper = MultiprocessingWrapper(dataset_class, **common,
                        stokes_normalization=normalization, batch_size=dataset_batch_size, **config)
-            items = [dict(data=f, ds_id=f'train_{group:02d}_{i:03d}', store_plot_image=False)
+            items = [{'data': f, 'ds_id': f'train_{group:02d}_{i:03d}', 'store_plot_image': False}
                      for i, f in enumerate(files)]
             if preparation_seed is not None:
                 for i,item in enumerate(items):
@@ -908,9 +918,7 @@ class HMISphericalDataset(SphericalDataset):
                 continue
             if segment_time != reference_time:
                 errors.append(f'{segment_name}: DATE-OBS {segment_time.isoformat()} != {reference_time.isoformat()}')
-            if (None in reference_origin) != (None in segment_origin):
-                errors.append(f'{segment_name}: detector origin {segment_origin} != {reference_origin}')
-            elif None not in reference_origin and not np.allclose(
+            if (None in reference_origin) != (None in segment_origin) or None not in reference_origin and not np.allclose(
                     segment_origin, reference_origin, rtol=0, atol=tolerance_pixels):
                 errors.append(f'{segment_name}: detector origin {segment_origin} != {reference_origin}')
             sx, sy = wcs.world_to_pixel_values(*world)
@@ -939,13 +947,13 @@ class FITSSphericalDataset(SphericalDataset):
                  spatial_wcs_axes=None, observer=None, time_reference='observation',
                  time_scale=None, line_id='custom', continuum_index=None,
                  time_hdu=None, **kwargs):
-        spec = dict(data_hdu=data_hdu, spatial_header_hdu=spatial_header_hdu,
-                    axis_order=axis_order, stokes_order=stokes_order, stokes_signs=stokes_signs,
-                    wavelength_center=wavelength_center, wavelength_grid=wavelength_grid,
-                    wavelength_unit=wavelength_unit, wavelength_grid_is_offsets=wavelength_grid_is_offsets,
-                    wavelength_hdu=wavelength_hdu, wavelength_range=wavelength_range, spatial_wcs_axes=spatial_wcs_axes,
-                    observer=observer, time_reference=time_reference, time_scale=time_scale,
-                    line_id=line_id, continuum_index=continuum_index)
+        spec = {'data_hdu': data_hdu, 'spatial_header_hdu': spatial_header_hdu,
+                    'axis_order': axis_order, 'stokes_order': stokes_order, 'stokes_signs': stokes_signs,
+                    'wavelength_center': wavelength_center, 'wavelength_grid': wavelength_grid,
+                    'wavelength_unit': wavelength_unit, 'wavelength_grid_is_offsets': wavelength_grid_is_offsets,
+                    'wavelength_hdu': wavelength_hdu, 'wavelength_range': wavelength_range, 'spatial_wcs_axes': spatial_wcs_axes,
+                    'observer': observer, 'time_reference': time_reference, 'time_scale': time_scale,
+                    'line_id': line_id, 'continuum_index': continuum_index}
         observation = read_fits_observation(data, **spec)
         observation['metadata']['reader'].update({k: v for k, v in spec.items() if v is not None})
         observation['metadata']['dataset_type'] = 'fits'
@@ -1039,7 +1047,7 @@ class TestSphericalDataset(SphericalDataset):
         super().__init__(stokes, map_data, wavelength_config, *args, **kwargs)
 
 
-def load_stokes_data(files, resolution: Optional[tuple[int, int]] = None):
+def load_stokes_data(files, resolution: tuple[int, int] | None = None):
     """Read each plane once into the float32 training cube, without stack copies."""
     files = np.asarray(files)
     if files.ndim != 2 or files.shape[0] != 4 or not files.shape[1]:

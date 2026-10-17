@@ -12,8 +12,6 @@ import zarr
 from torch.utils.data import Dataset, Sampler
 
 
-
-
 def _positive_integer(value, name):
     if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or value <= 0:
         raise ValueError(f'{name} must be a positive integer.')
@@ -166,7 +164,7 @@ class BatchesDataset(Dataset):
         self.data = {k: zarr.open_array(bf, mode='r') for k, bf in self.batches_file_paths.items()}
 
     def __len__(self):
-        ref_data = list(self.data.values())[0]
+        ref_data = next(iter(self.data.values()))
         n_batches = np.ceil(ref_data.shape[0] / self.batch_size)
         return n_batches.astype(np.int32)
 
@@ -208,7 +206,7 @@ class TensorsDataset(BatchesDataset):
 
         # shuffle data
         if shuffle:
-            r = np.random.permutation(list(tensors.values())[0].shape[0])
+            r = np.random.permutation(next(iter(tensors.values())).shape[0])
             tensors = {k: v[r] for k, v in tensors.items()}
 
         ds_name = uuid.uuid4() if ds_name is None else ds_name

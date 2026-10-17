@@ -1,5 +1,5 @@
-import pytest
 import numpy as np
+import pytest
 import torch
 from astropy import units as u
 
@@ -150,12 +150,12 @@ def test_source_ratio_matches_scaled_observations_across_mu_and_doppler_shifts()
     parameters['mu'] = torch.tensor([1., .8, .6, .4, .2, .1], dtype=torch.float64)[:, None]
     parameters['vdop'] = torch.linspace(-3000, 3000, 6, dtype=torch.float64)[:, None]
     wavelengths = torch.linspace(-.17, .17, 6, dtype=torch.float64)[None, :].expand(6, -1) * 1e-10
-    response = dict(
-        wavelength_grid=wavelengths,
-        spectral_offsets=torch.tensor([-.015, 0., .015], dtype=torch.float64)[None, None, :].expand(6, 6, -1) * 1e-10,
-        spectral_weights=torch.tensor([.2, .4, .2], dtype=torch.float64)[None, None, :].expand(6, 6, -1),
-        continuum_weights=torch.full((6, 6), .2, dtype=torch.float64),
-    )
+    response = {
+        'wavelength_grid': wavelengths,
+        'spectral_offsets': torch.tensor([-.015, 0., .015], dtype=torch.float64)[None, None, :].expand(6, 6, -1) * 1e-10,
+        'spectral_weights': torch.tensor([.2, .4, .2], dtype=torch.float64)[None, None, :].expand(6, 6, -1),
+        'continuum_weights': torch.full((6, 6), .2, dtype=torch.float64),
+    }
     reference = torch.stack(atmosphere(**parameters, **response), dim=-2)
     gain = torch.linspace(.3, 2., 6, dtype=torch.float64)[:, None]
     scaled_parameters = {**parameters, 'b0': parameters['b0'] * gain, 'b1': parameters['b1'] * gain}

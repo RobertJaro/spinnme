@@ -1,19 +1,19 @@
 """Generic FITS crops preserve cube axes, HDUs, WCS and detector coordinates."""
-from datetime import datetime
 import json
+from datetime import datetime
 
 import numpy as np
 import pytest
 from astropy.io import fits
 from astropy.wcs import WCS
+from test_fits_observations import header
 
 from spinnme.cli import main
 from spinnme.configuration import resolve_config
 from spinnme.data.crop import crop_fits
+from spinnme.data.hmi_time import load_hmi_date_obs_map
 from spinnme.data.hmi_transmission import MANIFEST_FORMAT, hmi_acquisition_key
 from spinnme.loader.spherical import HMISphericalDataset, SphericalDataModule, load_hmi_detector_coords
-from spinnme.data.hmi_time import load_hmi_date_obs_map
-from test_fits_observations import header
 
 
 def acquisition(tmp_path, kind='primary', roll=0.):
@@ -224,7 +224,8 @@ def test_generic_crop_accepts_a_single_hmi_segment(tmp_path):
 @pytest.mark.parametrize('binning', [1, 2])
 def test_phi_crop_preserves_detector_coordinates_across_nested_crops(tmp_path, telescope, binning):
     from test_fits_observations import cube
-    from spinnme.loader.spherical import PHIHRTSphericalDataset, PHIFDTSphericalDataset
+
+    from spinnme.loader.spherical import PHIFDTSphericalDataset, PHIHRTSphericalDataset
     source, values = cube(tmp_path)
     with fits.open(source, mode='update') as hdus:
         hdus[0].data = values.transpose(3, 2, 0, 1)

@@ -4,9 +4,10 @@ No disk-center, Earth observer, scan timing, or spatial WCS is guessed from
 incomplete Level-1 metadata. Supply the validated raster header explicitly.
 """
 from pathlib import Path
+
 import numpy as np
-from astropy.io import fits
 from astropy import units as u
+from astropy.io import fits
 
 from .fits import parse_time, spatial_header
 

@@ -29,7 +29,7 @@ def test_balanced_tail_preserves_pool_weights():
 
 def test_small_distributed_field_still_steps_on_every_rank(monkeypatch):
     for rank in range(4):
-        monkeypatch.setattr(TimeStratifiedBatchSampler, '_distributed_context', staticmethod(lambda: (rank, 4)))
+        monkeypatch.setattr(TimeStratifiedBatchSampler, '_distributed_context', staticmethod(lambda rank=rank: (rank, 4)))
         sampler = TimeStratifiedBatchSampler([[(0, 0)]], 4)
         assert len(sampler) == 1
         assert list(sampler) == [[(0, 0)]]
@@ -39,7 +39,7 @@ def test_distributed_tail_retains_all_data_with_equal_rank_steps(monkeypatch):
     indices = [(0, index) for index in range(10)]
     rank_batches = []
     for rank in range(2):
-        monkeypatch.setattr(TimeStratifiedBatchSampler, '_distributed_context', staticmethod(lambda: (rank, 2)))
+        monkeypatch.setattr(TimeStratifiedBatchSampler, '_distributed_context', staticmethod(lambda rank=rank: (rank, 2)))
         sampler = TimeStratifiedBatchSampler([indices], 4)
         rank_batches.append(list(sampler))
         assert len(sampler) == 2

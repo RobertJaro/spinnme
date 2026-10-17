@@ -1,7 +1,9 @@
 import torch
 from astropy import units as u
+
 from spinnme.instrument import hmi_wavelength_config
 from spinnme.train.me_spherical_module import MESphericalModule
+
 
 def _module(_unused=None, **kwargs):
     return MESphericalModule(
@@ -40,11 +42,11 @@ def _physical_batch():
 def physical_inputs(batch_size, wavelengths, device, dtype=torch.float32):
     # Deterministic, varied atmospheres including disk-center/limb and weak fields.
     column = torch.linspace(0, 1, batch_size, device=device, dtype=dtype)[:, None]
-    parameters = dict(b_field=10 + 1990 * column, cos_inc=.1 + .8 * column,
-                      vmac=1500 + 1000 * column, damping=.01 + .99 * column,
-                      b0=.8 - .3 * column, b1=.2 + .3 * column,
-                      mu=.05 + .95 * column, vdop=-3000 + 6000 * column,
-                      kl=5 + 20 * column)
+    parameters = {'b_field': 10 + 1990 * column, 'cos_inc': .1 + .8 * column,
+                      'vmac': 1500 + 1000 * column, 'damping': .01 + .99 * column,
+                      'b0': .8 - .3 * column, 'b1': .2 + .3 * column,
+                      'mu': .05 + .95 * column, 'vdop': -3000 + 6000 * column,
+                      'kl': 5 + 20 * column}
     parameters['sin_inc2'] = 1 - parameters['cos_inc'].square()
     parameters['sin_inc2_cos2azi'] = parameters['sin_inc2'] * torch.cos(column * 4)
     parameters['sin_inc2_sin2azi'] = parameters['sin_inc2'] * torch.sin(column * 4)

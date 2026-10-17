@@ -1,7 +1,7 @@
 import numpy as np
 import torch
-from astropy import units as u
 from astropy import constants as const
+from astropy import units as u
 
 from spinnme.data.util import cartesian_to_spherical, spherical_to_cartesian
 

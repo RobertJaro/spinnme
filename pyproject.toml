@@ -56,3 +56,11 @@ markers = ["integration: short end-to-end tests", "gpu: optional accelerator tes
 [tool.ruff]
 line-length = 120
 target-version = "py311"
+
+[tool.ruff.lint]
+# Configuration validation consistently exposes ValueError to CLI/API callers.
+ignore = ["TRY004"]
+
+[tool.ruff.lint.per-file-ignores]
+# Observation fixtures deliberately exercise the timezone-naive UTC time API.
+"tests/*.py" = ["DTZ001"]

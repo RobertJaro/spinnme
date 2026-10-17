@@ -7,31 +7,37 @@ same arrays. Inputs are never downloaded from this module.
 """
 from __future__ import annotations
 
-from datetime import datetime
 import json
 import os
-from pathlib import Path
 import random
 import tempfile
 import time
 import uuid
+from datetime import datetime
+from pathlib import Path
 from weakref import WeakValueDictionary
 
 import numpy as np
+import torch
+import zarr
 from astropy import units as u
 from astropy.io import fits
 from astropy.wcs import WCS
 from filelock import FileLock
 from pytorch_lightning import LightningDataModule
 from pytorch_lightning.utilities import rank_zero_only
-import torch
-import zarr
 
-from spinnme.loader.spherical import (SphericalDataModule, SphericalDataset,
-    FITSSphericalDataset, HMISphericalDataset, PHIHRTSphericalDataset,
-    PHIFDTSphericalDataset, HinodeSphericalDataset, TestSphericalDataset)
+from spinnme.loader.spherical import (
+    FITSSphericalDataset,
+    HinodeSphericalDataset,
+    HMISphericalDataset,
+    PHIFDTSphericalDataset,
+    PHIHRTSphericalDataset,
+    SphericalDataModule,
+    SphericalDataset,
+    TestSphericalDataset,
+)
 from spinnme.progress import progress
-
 
 _LOADED_MODULES = WeakValueDictionary()
 DATASET_CLASSES = {cls.__name__:cls for cls in (SphericalDataset, FITSSphericalDataset,

@@ -5,12 +5,12 @@ import pytest
 import torch
 
 from spinnme.train.collocation import LongitudeInterval, SphericalCollocationDomain
+from spinnme.train.me_spherical_module import MESphericalModule
 from spinnme.train.physics_regularization import (
     PhysicsRegularization,
     build_spherical_collocation_domain,
     split_stokes_and_physics_config,
 )
-from spinnme.train.me_spherical_module import MESphericalModule
 
 
 class _Dataset:
@@ -294,6 +294,7 @@ def test_scanned_raster_physics_domain_includes_pixel_time_range():
 
 def test_inversion_and_shell_force_free_loss_backpropagate_through_vector_potential():
     from _training_helpers import _physical_batch
+
     from spinnme.instrument import hmi_wavelength_config
     from spinnme.train.physics import PhysicsConstraintModule
 

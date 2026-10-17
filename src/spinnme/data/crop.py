@@ -2,15 +2,14 @@
 from __future__ import annotations
 
 import glob
-from pathlib import Path
 import re
 import tempfile
+from pathlib import Path
 
 import numpy as np
 from astropy import units as u
 from astropy.io import fits
 from astropy.wcs import WCS
-
 
 _IMAGES = (fits.PrimaryHDU, fits.ImageHDU, fits.CompImageHDU)
 
@@ -22,7 +21,7 @@ def _files(inputs):
         value = Path(value).expanduser()
         if value.is_dir():
             found = [path for path in value.iterdir() if path.is_file()
-                     and re.search(r'\.(fits?|fts)(\.(gz|fz))?$', path.name, re.I)]
+                     and re.search(r'\.(fits?|fts)(\.(gz|fz))?$', path.name, re.IGNORECASE)]
         else:
             found = [Path(path) for path in glob.glob(str(value))]
         paths.update(path.resolve() for path in found if path.is_file())

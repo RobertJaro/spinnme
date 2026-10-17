@@ -1,14 +1,14 @@
 """Versioned, tensor-only inference snapshots with portable observation metadata."""
 from __future__ import annotations
 
-from datetime import datetime
-from dataclasses import fields, is_dataclass
-from copy import deepcopy
 import hashlib
 import json
+import tempfile
+from copy import deepcopy
+from dataclasses import fields, is_dataclass
+from datetime import datetime
 from numbers import Integral, Real
 from pathlib import Path
-import tempfile
 
 import numpy as np
 import torch
@@ -282,8 +282,9 @@ class Snapshot(SphericalSynthesis):
         selected_id = instrument_id or row.get('instrument_id') or self.instrument_id
         self._instrument(selected_id)
         row['instrument_id'] = selected_id
-        from .grids import spatial_header
         from sunpy.map import Map
+
+        from .grids import spatial_header
         header = spatial_header(row['header'])
         types = {item['instrument_id']: item['type'] for item in self.metadata['init']['instrument_config']}
         is_hmi = types.get(selected_id) == 'hmi' or 'HMI' in str(header.get('INSTRUME', '')).upper()
@@ -378,11 +379,12 @@ class Snapshot(SphericalSynthesis):
         ``time`` changes the model epoch while retaining the selected observing geometry.
         ``shape`` and ``bounds`` use grid(); ``coordinates`` accepts physical SkyCoord samples.
         """
+        from astropy.coordinates import SkyCoord
+
         from .exports import EvaluationResult, expand_parameters, parameter_units
         from .grids import GridGeometry, support_mask
-        from .train.spherical_synthesis import transform_spherical_parameters, scale_spherical_forward_parameters
-        from astropy.coordinates import SkyCoord
         from .progress import progress as track_progress
+        from .train.spherical_synthesis import scale_spherical_forward_parameters, transform_spherical_parameters
         if isinstance(batch_size, (bool, np.bool_)) or not isinstance(batch_size, Integral) or batch_size < 1:
             raise ValueError("batch_size must be a positive integer.")
         if isinstance(mu_limit, (bool, np.bool_)) or not isinstance(mu_limit, Real) or not np.isfinite(mu_limit) or not 0 <= mu_limit < 1:
@@ -437,8 +439,8 @@ class Snapshot(SphericalSynthesis):
             mask[start:stop] = valid
             if not valid.any():
                 continue
-            def tensor(key):
-                return torch.as_tensor(g[key][valid], dtype=torch.float32, device=self.device)
+            def tensor(key, geometry=g, valid_mask=valid):
+                return torch.as_tensor(geometry[key][valid_mask], dtype=torch.float32, device=self.device)
             coords = tensor("coords")
             vector_potential = bool(getattr(self.parameter_model, "vector_potential", False))
             with torch.set_grad_enabled(vector_potential):

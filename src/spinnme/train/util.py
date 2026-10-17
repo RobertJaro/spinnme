@@ -8,7 +8,6 @@ from spinnme.data.differential_rotation import carrington_rotation_rate, differe
 from spinnme.data.util import cartesian_to_spherical, spherical_to_cartesian
 
 
-
 def atan2_safe(numerator, denominator):
     epsilon = 1e-7
     nudge = (denominator == 0) * epsilon

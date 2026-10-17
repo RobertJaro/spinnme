@@ -26,8 +26,8 @@ def test_seed_scaling_and_checkpoint_restore():
 
 
 def test_mlp_integration_and_optional_raw_coordinates():
-    config = dict(type='gaussian', num_frequencies=8, scale=[1, 2, 3], seed=0,
-                  include_input=True)
+    config = {'type': 'gaussian', 'num_frequencies': 8, 'scale': [1, 2, 3], 'seed': 0,
+                  'include_input': True}
     model = MLPModel(3, 2, dim=16, n_layers=2, encoding_config=config, activation='relu')
     coords = torch.randn(5, 3)
     assert model(coords).shape == (5, 2)
@@ -36,9 +36,9 @@ def test_mlp_integration_and_optional_raw_coordinates():
     assert config['type'] == 'gaussian'
 
 
-@pytest.mark.parametrize('options', [dict(num_frequencies=0), dict(num_frequencies=1.5),
-                                    dict(scale=0), dict(scale=float('nan')),
-                                    dict(scale=[1, 2, 3])])
+@pytest.mark.parametrize('options', [{'num_frequencies': 0}, {'num_frequencies': 1.5},
+                                    {'scale': 0}, {'scale': float('nan')},
+                                    {'scale': [1, 2, 3]}])
 def test_invalid_options(options):
     with pytest.raises(ValueError):
         GaussianFourierEncoding(2, **options)

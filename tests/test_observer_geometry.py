@@ -73,6 +73,7 @@ def test_map_mu_matches_sunpy_three_dimensional_rays_and_doppler_signs():
 
 def test_dataset_mu_is_exactly_the_batch_projection(tmp_path):
     import torch
+
     from spinnme.instrument import hmi_wavelength_config
     from spinnme.loader.spherical import SphericalDataset
 
@@ -98,9 +99,9 @@ def test_dataset_mu_is_exactly_the_batch_projection(tmp_path):
 
 @pytest.mark.parametrize('filter_nans,shuffle', [(True, True), (True, False), (False, False)])
 def test_minimal_pixel_cache_reconstructs_original_samples(tmp_path, filter_nans, shuffle):
+    from spinnme.data.util import spherical_to_cartesian
     from spinnme.instrument import hmi_wavelength_config
     from spinnme.loader.spherical import SphericalDataset, hmi_detector_mapping, load_hmi_detector_coords
-    from spinnme.data.util import spherical_to_cartesian
 
     solar_map = _map()
     solar_map.meta['CCD_X0'] = 100
@@ -143,8 +144,8 @@ def test_minimal_pixel_cache_reconstructs_original_samples(tmp_path, filter_nans
 
 
 def test_resampled_pixel_geometry_matches_sunpy():
-    from spinnme.loader.spherical import spherical_geometry_from_pixels
     from spinnme.data.util import spherical_to_cartesian
+    from spinnme.loader.spherical import spherical_geometry_from_pixels
     solar_map = _map().resample([5, 6]*u.pix)
     info = load_map_data(solar_map)
     result = spherical_geometry_from_pixels(
@@ -240,11 +241,12 @@ def test_map_geometry_works_with_absent_or_radial_only_velocity(radial):
 def test_detector_roll_and_hmi_azimuth_follow_wcs(roll_deg, representation, resample):
     """Check detector handedness independently of the projection implementation."""
     import torch
+
     from spinnme.data.util import spherical_to_cartesian_matrix
-    from spinnme.loader.spherical import spherical_geometry_from_pixels
-    from spinnme.train.spherical_synthesis import transform_spherical_parameters
-    from spinnme.train.me_atmosphere import HMIMEAtmosphere, MEAtmosphere
     from spinnme.instrument import HMI_WAVELENGTH_CENTER
+    from spinnme.loader.spherical import spherical_geometry_from_pixels
+    from spinnme.train.me_atmosphere import HMIMEAtmosphere, MEAtmosphere
+    from spinnme.train.spherical_synthesis import transform_spherical_parameters
 
     solar_map = _map()
     header = dict(solar_map.meta)
@@ -302,13 +304,13 @@ def test_detector_roll_and_hmi_azimuth_follow_wcs(roll_deg, representation, resa
     # Independent HMI synthesis reference: azimuth from detector +x. The public
     # angle is from +y, so HMI must convert its double-angle products once.
     b2 = bx*bx + by*by + .4**2
-    parameters = dict(b_field=torch.tensor([[1200.]], dtype=torch.float64),
-        sin_inc2=transformed['sin_inc2'], cos_inc=transformed['cos_inc'],
-        vmac=torch.tensor([[2000.]], dtype=torch.float64), damping=torch.tensor([[.2]], dtype=torch.float64),
-        b0=torch.tensor([[.8]], dtype=torch.float64), b1=torch.tensor([[.2]], dtype=torch.float64),
-        mu=torch.ones(1, 1, dtype=torch.float64), vdop=torch.zeros(1, 1, dtype=torch.float64),
-        kl=torch.tensor([[25.]], dtype=torch.float64),
-        wavelength_grid=torch.linspace(-.2, .2, 31, dtype=torch.float64)[None]*1e-10)
+    parameters = {'b_field': torch.tensor([[1200.]], dtype=torch.float64),
+        'sin_inc2': transformed['sin_inc2'], 'cos_inc': transformed['cos_inc'],
+        'vmac': torch.tensor([[2000.]], dtype=torch.float64), 'damping': torch.tensor([[.2]], dtype=torch.float64),
+        'b0': torch.tensor([[.8]], dtype=torch.float64), 'b1': torch.tensor([[.2]], dtype=torch.float64),
+        'mu': torch.ones(1, 1, dtype=torch.float64), 'vdop': torch.zeros(1, 1, dtype=torch.float64),
+        'kl': torch.tensor([[25.]], dtype=torch.float64),
+        'wavelength_grid': torch.linspace(-.2, .2, 31, dtype=torch.float64)[None]*1e-10}
     actual = HMIMEAtmosphere(wavelength_center=HMI_WAVELENGTH_CENTER).double()(
         **parameters, sin_inc2_cos2azi=transformed['sin_inc2_cos2azi'],
         sin_inc2_sin2azi=transformed['sin_inc2_sin2azi'])

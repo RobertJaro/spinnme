@@ -4,21 +4,22 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
+
 import numpy as np
 
 from .metrics import broadcast_mask, comparison, residual
 
-__all__ = ["comparison", "residual", "evaluate_result", "read_reference", "write_metrics"]
+__all__ = ["comparison", "evaluate_result", "read_reference", "residual", "write_metrics"]
 
 
 def read_reference(path, result):
-    from ..exports import read_npz, EvaluationResult
+    from ..exports import EvaluationResult, read_npz
     path = Path(path)
     if path.suffix.lower() == ".npz":
         reference = read_npz(path)
     else:
-        from astropy.io import fits
         from astropy import units as u
+        from astropy.io import fits
         if len(result.arrays) != 1:
             raise ValueError("A single reference FITS requires one selected parameter; use NPZ for several maps.")
         name = next(iter(result.arrays))
@@ -40,8 +41,8 @@ def read_reference(path, result):
     second = WCS(reference.header).celestial.pixel_to_world_values(x, y)
     if not all(np.allclose(a, b, rtol=0, atol=1e-8, equal_nan=True) for a, b in zip(first, second)):
         raise ValueError("Reference WCS differs; align explicitly before evaluation.")
-    from astropy.time import Time
     from astropy import units as u
+    from astropy.time import Time
     from sunpy.map import Map
     first_map = Map(np.zeros((1, 1)), result.header)
     second_map = Map(np.zeros((1, 1)), reference.header)

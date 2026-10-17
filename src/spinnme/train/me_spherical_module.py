@@ -1,6 +1,6 @@
-import warnings
 import copy
-from typing import Dict, Any
+import warnings
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -8,14 +8,13 @@ import torch
 import torch.distributed as dist
 from astropy import units as u
 from astropy.visualization import ImageNormalize
-from matplotlib.colors import SymLogNorm, Normalize
+from matplotlib.colors import Normalize, SymLogNorm
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from pytorch_lightning import LightningModule
 from pytorch_lightning.loggers import WandbLogger
 from torch import nn
 from torch.optim.lr_scheduler import LambdaLR
 
-from spinnme.train.util import to_spherical, to_cartesian
 from spinnme.instrument import resolve_instrument_line
 from spinnme.model import (
     LimbCorrectionModel,
@@ -25,16 +24,16 @@ from spinnme.model import (
     VelocityCorrectionModel,
 )
 from spinnme.train.artifact_correction import ArtifactCorrectionModule
-from spinnme.train.me_atmosphere import HMIMEAtmosphere, PHIMEAtmosphere, MEAtmosphere
+from spinnme.train.me_atmosphere import HMIMEAtmosphere, MEAtmosphere, PHIMEAtmosphere
+from spinnme.train.metrics import TrainingMetricWindow
+from spinnme.train.numerics import write_numerical_report
 from spinnme.train.physics import PhysicsWeightSchedule
 from spinnme.train.physics_regularization import (
     PhysicsRegularization,
     split_stokes_and_physics_config,
 )
 from spinnme.train.soap import SOAP
-from spinnme.train.metrics import TrainingMetricWindow
 from spinnme.train.spectral_response import InstrumentSpectralResponse
-from spinnme.train.numerics import write_numerical_report
 from spinnme.train.spherical_synthesis import (
     correct_spherical_limb_effects,
     field_free_forward_parameters,
@@ -43,9 +42,7 @@ from spinnme.train.spherical_synthesis import (
     transform_spherical_parameters,
 )
 from spinnme.train.stokes_loss import StokesLossModule
-from spinnme.train.util import log_wandb_image, random_time_shift_coords
-
-
+from spinnme.train.util import log_wandb_image, random_time_shift_coords, to_cartesian, to_spherical
 
 
 class MESphericalModule(LightningModule):
@@ -253,12 +250,10 @@ class MESphericalModule(LightningModule):
         self._time_shift_enabled = scale_value > 0
         self.time_shift_scale = nn.Parameter(torch.tensor(scale_value, dtype=torch.float32), requires_grad=False)
         self.time_shift_scale_gamma = scale_value / time_shift_config['iterations'] if time_shift_config['iterations'] > 0 else 0.0
-        #
         self.gauss_per_dB = gauss_per_dB
         self.Rs_per_ds = Rs_per_ds
         self.meters_per_ds = Rs_per_ds * (1 * u.Rsun).to_value(u.m)
         self.seconds_per_dt = seconds_per_dt
-        #
         self.val_outputs = []
 
     @torch.no_grad()
@@ -714,7 +709,7 @@ class MESphericalModule(LightningModule):
         outputs_list = [batches[index] for index in sorted(batches)]
 
         outputs = {}
-        for k in outputs_list[0].keys():
+        for k in outputs_list[0]:
             outputs[k] = torch.cat([o[k] for o in outputs_list], dim=0)
 
         I_diff, Q_diff, U_diff, V_diff = torch.nanmean(outputs['diff'], dim=(0, 2))
@@ -1233,7 +1228,7 @@ class MESphericalModule(LightningModule):
         self._log_validation_image(fig, 'Artifact leakage and correction gate')
         plt.close(fig)
 
-    def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+    def on_save_checkpoint(self, checkpoint: dict[str, Any]) -> None:
         checkpoint['spinnme_checkpoint_version'] = 1
         checkpoint['coordinate_order'] = 'xyzt'
         checkpoint['spinnme_wavelength_reduction'] = self.wavelength_reduction
@@ -1268,7 +1263,7 @@ class MESphericalModule(LightningModule):
             raise ValueError('Normalization objective must provide Q, U, and V asinh alphas.')
         return {**config, 'asinh_alphas': [float(value) for value in values]}
 
-    def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+    def on_load_checkpoint(self, checkpoint: dict[str, Any]) -> None:
         required = {
             'spinnme_checkpoint_version', 'coordinate_order', 'state_dict',
             'spinnme_wavelength_reduction', 'spinnme_instrument_weights',

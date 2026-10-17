@@ -17,7 +17,8 @@ def download_phi(output_directory, start, end, telescope="hrt", products=("stoke
         raise ValueError(f"Choose PHI products from {sorted(allowed)}.")
     try:
         import sunpy_soar  # noqa: F401 - registers the archive client
-        from sunpy.net import Fido, attrs as a
+        from sunpy.net import Fido
+        from sunpy.net import attrs as a
     except ImportError as error:
         raise ImportError("PHI downloads require the spinnme[download] extra.") from error
     from astropy.time import Time

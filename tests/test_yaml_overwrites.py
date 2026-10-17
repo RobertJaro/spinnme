@@ -4,8 +4,7 @@ from pathlib import Path
 import pytest
 
 from spinnme.cli import main
-from spinnme.configuration import (list_configs, read_config, resolve_config,
-                                   substitute_placeholders, write_config)
+from spinnme.configuration import list_configs, read_config, resolve_config, substitute_placeholders, write_config
 
 
 def test_bundled_runs_start_with_named_paths():
@@ -45,7 +44,7 @@ def test_set_overwrites_fill_named_paths_and_typed_model_settings():
 
 
 def test_cli_named_overwrites_and_generic_declared_flags(tmp_path, monkeypatch):
-    import spinnme.training.runner as runner
+    from spinnme.training import runner
     config = read_config('synthetic/circular')
     config['model']['dim'] = '<<width>>'
     config['data']['train_configs'][0]['data_path'] = '<<stokes_files>>'

@@ -1,5 +1,6 @@
 """Bundled instrument definitions, available after wheel installation."""
 from importlib.resources import files
+
 import yaml
 
 

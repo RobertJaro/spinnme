@@ -3,10 +3,15 @@ import numpy as np
 import torch
 from astropy import units as u
 from tqdm import tqdm
+
+from spinnme.train.spherical_synthesis import (
+    correct_spherical_limb_effects,
+    field_free_forward_parameters,
+    mix_magnetic_filling_factor,
+    scale_spherical_forward_parameters,
+    transform_spherical_parameters,
+)
 from spinnme.train.stokes_loss import StokesLossModule
-from spinnme.train.spherical_synthesis import (correct_spherical_limb_effects,
-    field_free_forward_parameters, mix_magnetic_filling_factor,
-    scale_spherical_forward_parameters, transform_spherical_parameters)
 
 
 class SphericalSynthesis:
@@ -33,7 +38,7 @@ class SphericalSynthesis:
                                spectral_offsets=None, spectral_weights=None,
                                continuum_weights=None, detector_coords=None,
                                spectral_response_file=None, pix=None,
-                               batch_size=int(2 ** 13), progress=True,
+                               batch_size=2 ** 13, progress=True,
                                denormalize_stokes=False):
         """Evaluate a spherical inversion and synthesize observer-frame Stokes profiles.
 
@@ -115,9 +120,8 @@ class SphericalSynthesis:
                 and spectral_offsets is None:
             raise ValueError('HMI synthesis requires a transmission response file or sampled response arrays.')
 
-        if instrument_id in self.artifact_correction_models:
-            if pix is None:
-                raise ValueError(f'Artifact correction for {instrument_id!r} requires normalized pix coordinates.')
+        if instrument_id in self.artifact_correction_models and pix is None:
+            raise ValueError(f'Artifact correction for {instrument_id!r} requires normalized pix coordinates.')
         if pix is not None:
             pix = self._flat_tensor(pix, (2,), 'pix')
             if pix.shape[0] != n_points:

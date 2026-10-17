@@ -6,17 +6,17 @@ the requested constraints need.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass
 from numbers import Integral, Real
-from typing import Any, ClassVar, Collection, Mapping
+from typing import Any, ClassVar
 
 import torch
 from torch import nn
 
 from spinnme.data.util import cartesian_to_spherical
 from spinnme.model import jacobian
-
 
 CONSTRAINT_NAMES = (
     "induction",
@@ -103,7 +103,7 @@ class PhysicsWeightSchedule:
             )
 
     @classmethod
-    def from_config(cls, config: Real | Mapping[str, Any]) -> "PhysicsWeightSchedule":
+    def from_config(cls, config: Real | Mapping[str, Any]) -> PhysicsWeightSchedule:
         """Parse a fixed number or the existing scheduled-weight mapping."""
         if isinstance(config, Real) and not isinstance(config, bool):
             value = float(config)

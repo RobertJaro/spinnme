@@ -257,6 +257,7 @@ def _synthetic(args):
         if args.size is not None or args.frames is not None:
             raise ValueError('Use --config or the simple --size/--frames options, not both.')
         import yaml
+
         from .data.synthetic_sequence import generate_dataset
         try:
             specification = yaml.safe_load(Path(args.config).expanduser().read_text())
@@ -281,7 +282,7 @@ def main(argv=None):
             source = getattr(args, 'config', None) or getattr(args, 'source', None)
             if source is None or args.command not in ('run', 'prep', 'config'):
                 parser.error('unrecognized arguments: '+' '.join(extra))
-            from .configuration import read_config, placeholder_keys
+            from .configuration import placeholder_keys, read_config
             keys = placeholder_keys(read_config(source))
             overwrite_parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
             for key in sorted(keys):

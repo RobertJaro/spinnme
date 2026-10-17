@@ -9,12 +9,17 @@ from astropy.io import fits
 from sunpy.coordinates import frames
 from sunpy.map import make_fitswcs_header
 
-from spinnme.data.fits import (read_fits_observation, observation_times, parse_time,
-                              wavelength_configuration)
+from spinnme.data.fits import observation_times, parse_time, read_fits_observation, wavelength_configuration
 from spinnme.data.phi import read_phi_observation
 from spinnme.data.prepare_hinode import prepare_hinode_raster
-from spinnme.loader.spherical import (FITSSphericalDataset, HinodeSphericalDataset,
-    SphericalDataModule, HMISphericalDataset, spherical_geometry_from_pixels, load_map_data)
+from spinnme.loader.spherical import (
+    FITSSphericalDataset,
+    HinodeSphericalDataset,
+    HMISphericalDataset,
+    SphericalDataModule,
+    load_map_data,
+    spherical_geometry_from_pixels,
+)
 
 
 def header(shape=(3, 5)):
@@ -144,8 +149,8 @@ def test_spherical_dataset_sampling_options_are_validated(tmp_path, options, mes
 
 def test_datamodule_selection_and_registry(tmp_path):
     path,_ = cube(tmp_path)
-    config = dict(type='fits', data_path=str(path), instrument_id='A',
-                  axis_order=['stokes','wavelength','y','x'])
+    config = {'type': 'fits', 'data_path': str(path), 'instrument_id': 'A',
+                  'axis_order': ['stokes','wavelength','y','x']}
     module = SphericalDataModule([config],config,str(tmp_path/'cache'),
                  ref_time='2024-03-23T00:00:00',batch_size=8,dataset_batch_size=4,
                  num_workers=0,num_dataset_workers=0)
@@ -156,8 +161,8 @@ def test_datamodule_selection_and_registry(tmp_path):
 
 def test_automatic_time_origin_uses_selected_model_epoch(tmp_path):
     path,_=cube(tmp_path)
-    config=dict(type='fits',data_path=str(path),instrument_id='A',
-                axis_order=['stokes','wavelength','y','x'],time_reference='earth')
+    config={'type': 'fits','data_path': str(path),'instrument_id': 'A',
+                'axis_order': ['stokes','wavelength','y','x'],'time_reference': 'earth'}
     module=SphericalDataModule([config],config,str(tmp_path/'cache'),
                 batch_size=8,dataset_batch_size=4,num_workers=0,num_dataset_workers=0)
     assert module.ref_time == datetime(2024,3,23,0,5)
@@ -349,6 +354,7 @@ def test_holdout_exclusion_preserves_acquisition_order():
 @pytest.mark.parametrize('descending', [False, True])
 def test_hinode_preset_trains_both_lines_from_one_raster(tmp_path, descending):
     import torch
+
     from spinnme.configuration import resolve_config
     from spinnme.train.me_spherical_module import MESphericalModule
 
@@ -402,8 +408,8 @@ def test_hinode_preset_trains_both_lines_from_one_raster(tmp_path, descending):
 
 def test_spectral_window_units_continuum_and_empty_selection(tmp_path):
     path, expected = cube(tmp_path)
-    options = dict(axis_order=['stokes', 'wavelength', 'y', 'x'],
-                   wavelength_unit='nm', wavelength_range=[617.33, None])
+    options = {'axis_order': ['stokes', 'wavelength', 'y', 'x'],
+                   'wavelength_unit': 'nm', 'wavelength_range': [617.33, None]}
     observation = read_fits_observation(path, continuum_index=6, **options)
     absolute = (observation['wavelength_config']['wavelength_grid'] +
                 observation['wavelength_config']['wavelength_center']).to_value(u.nm)
@@ -461,8 +467,8 @@ def test_separate_spatial_hdu_preserves_science_metadata_and_model_clock(tmp_pat
     spatial.header['WAVELNTH'] = 6302.5
     output = tmp_path/'extensions.fits'
     fits.HDUList([fits.PrimaryHDU(), science, spatial]).writeto(output)
-    options = dict(data_hdu='SCI', spatial_header_hdu='SPATIAL',
-                   axis_order=['stokes', 'wavelength', 'y', 'x'])
+    options = {'data_hdu': 'SCI', 'spatial_header_hdu': 'SPATIAL',
+                   'axis_order': ['stokes', 'wavelength', 'y', 'x']}
     observation = read_fits_observation(output, **options)
     np.testing.assert_array_equal(observation['stokes'], expected)
     assert (observation['header']['CRVAL1']*u.Unit(observation['header']['CUNIT1'])).to_value(u.arcsec) == pytest.approx(.01)

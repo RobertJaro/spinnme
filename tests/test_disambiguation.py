@@ -5,12 +5,12 @@ import math
 import numpy as np
 import pytest
 import torch
+from _training_helpers import _module, _physical_batch
 
 from spinnme.model import MESphericalModel, MESphericalSirenModel
 from spinnme.train.collocation import LongitudeInterval, SphericalCollocationDomain
-from spinnme.train.spherical_synthesis import transform_spherical_parameters
 from spinnme.train.me_spherical_module import MESphericalModule
-from _training_helpers import _module, _physical_batch
+from spinnme.train.spherical_synthesis import transform_spherical_parameters
 
 
 def transform(field, angle=None):
@@ -149,7 +149,8 @@ def test_validation_plot_displays_rotation_only_when_present(monkeypatch):
 def test_portable_snapshot_preserves_rotation_and_synthesized_profiles(tmp_path):
     from datetime import datetime
     from types import SimpleNamespace
-    from spinnme.snapshots import save_snapshot, Snapshot
+
+    from spinnme.snapshots import Snapshot, save_snapshot
 
     module = make_module()
     batch = _physical_batch()['HMI']

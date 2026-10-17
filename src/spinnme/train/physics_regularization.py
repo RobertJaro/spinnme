@@ -9,12 +9,13 @@ model or data-loader batches.
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
 import hashlib
 import json
 import math
-from typing import Any, Mapping, Sequence
 import warnings
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any, ClassVar
 
 import torch
 
@@ -30,7 +31,6 @@ from spinnme.train.physics import (
     PhysicsConstraintModule,
     PhysicsWeightSchedule,
 )
-
 
 STOKES_COMPONENTS = ("I", "Q", "U", "V")
 PHYSICS_CONSTRAINTS = frozenset(CONSTRAINT_NAMES)
@@ -174,7 +174,7 @@ def build_spherical_collocation_domain(
 class PhysicsRegularization:
     """Evaluate scheduled constraints at independent continuous coordinates."""
 
-    _CONFIG_KEYS = {
+    _CONFIG_KEYS: ClassVar[set[str]] = {
         "constraints",
         "num_points",
         "seed",

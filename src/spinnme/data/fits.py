@@ -6,9 +6,9 @@ missing observer geometry from a filename. Those are configuration inputs.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from pathlib import Path
-import re
 
 import numpy as np
 from astropy import units as u
@@ -97,9 +97,9 @@ def observation_header(hdus, data_hdu=0, spatial_header_hdu=None):
             if wcs_card.match(key):
                 del header[key]
         for card in spatial.cards:
-            if wcs_card.match(card.keyword) or card.keyword not in header:
-                if not card.keyword.startswith('NAXIS'):
-                    header[card.keyword] = (card.value, card.comment)
+            if ((wcs_card.match(card.keyword) or card.keyword not in header)
+                    and not card.keyword.startswith('NAXIS')):
+                header[card.keyword] = (card.value, card.comment)
     return header
 
 
@@ -198,7 +198,7 @@ def read_fits_observation(path, *, data_hdu=0, spatial_header_hdu=None,
         if raw.ndim != 4:
             raise ValueError(f"Expected a 4D Stokes cube in HDU {data_hdu}, got {raw.shape}.")
         stokes = np.transpose(raw, [axes.index(axis) for axis in ("y", "x", "stokes", "wavelength")])
-        order = list(stokes_order) if isinstance(stokes_order, str) else list(stokes_order)
+        order = list(stokes_order)
         if sorted(order) != sorted("IQUV") or stokes.shape[-2] != 4:
             raise ValueError("A four-component I/Q/U/V Stokes order is required.")
         stokes = np.array(stokes[..., [order.index(s) for s in "IQUV"], :], dtype=np.float32)

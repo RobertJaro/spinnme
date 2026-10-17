@@ -2,14 +2,16 @@ import copy
 import csv
 import json
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 import pytest
 from astropy.io import fits
 
-from spinnme.data.synthetic_sequence import (_canonical_hash as canonical_hash, _checksum as checksum,
-                                              expand_acquisition_grid, generate_dataset)
 from spinnme.cli import main
+from spinnme.data.synthetic_sequence import _canonical_hash as canonical_hash
+from spinnme.data.synthetic_sequence import _checksum as checksum
+from spinnme.data.synthetic_sequence import expand_acquisition_grid, generate_dataset
 
 
 def _spec():
@@ -30,7 +32,7 @@ def fake_generator(monkeypatch):
     from spinnme.data import create_spherical_test_set
 
     class Generator:
-        calls = []
+        calls: ClassVar[list] = []
 
         def __init__(self, nx, ny, wavelength_grid, **kwargs):
             self.shape = (nx, ny)

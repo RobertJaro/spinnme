@@ -1,5 +1,5 @@
-from types import SimpleNamespace
 from contextlib import nullcontext
+from types import SimpleNamespace
 
 import pytest
 
@@ -38,7 +38,7 @@ def test_optional_prep_only_caches_the_supplied_yaml(tmp_path, monkeypatch):
     source = write_config(config, tmp_path/'inversion.yaml')
     before = source.read_bytes()
     calls = []
-    module = SimpleNamespace(get_observations=lambda: [], train_datasets=[object()],
+    module = SimpleNamespace(get_observations=list, train_datasets=[object()],
                              cache_reused=False, cache_manifest=tmp_path/'cache.json')
     def prepare(data, work, **kwargs):
         calls.append((data, work, kwargs))
@@ -141,7 +141,9 @@ def test_cli_reports_runtime_failures_without_traceback(tmp_path, monkeypatch, c
 def test_phi_download_rejects_empty_and_partial_transfers(tmp_path, monkeypatch, failed):
     import sys
     import types
+
     from sunpy.net import Fido, attrs
+
     from spinnme.data.download_phi import download_phi
 
     class Fetched(list):

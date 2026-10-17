@@ -1,13 +1,15 @@
 """Portable deterministic circular-pattern spherical FITS fixtures."""
 from pathlib import Path
+
 import numpy as np
 from astropy import units as u
 from astropy.coordinates import SkyCoord
-from astropy.time import Time
 from astropy.io import fits
+from astropy.time import Time
 from sunpy.coordinates import frames
 
 from spinnme.instrument import hmi_wavelength_config
+
 from .create_spherical_test_set import SphericalTestSetGenerator
 
 

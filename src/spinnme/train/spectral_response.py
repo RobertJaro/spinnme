@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import copy
 import math
+
 import numpy as np
 import torch
-from torch import nn
 from astropy import units as u
+from torch import nn
 
 
 class InstrumentSpectralResponse(nn.Module):

@@ -1,6 +1,6 @@
 """Progress bars for training and validation data loading."""
-from multiprocessing import current_process
 import os
+from multiprocessing import current_process
 
 from tqdm import tqdm
 

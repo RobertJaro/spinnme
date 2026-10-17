@@ -4,13 +4,12 @@ import os
 
 import pytest
 import torch
+from _training_helpers import _module, _physical_batch, physical_inputs
 from pytorch_lightning import Trainer
 from torch.utils.data import DataLoader
 
-from _training_helpers import physical_inputs
 from spinnme.instrument import HMI_WAVELENGTH_CENTER
 from spinnme.train.me_atmosphere import HMIMEAtmosphere, MEAtmosphere
-from _training_helpers import _module, _physical_batch
 
 
 @pytest.fixture(scope='module')
@@ -67,8 +66,8 @@ def test_compile_config_state_dict_export_and_eager_evaluation(monkeypatch):
 def test_compiled_training_and_checkpoint_resume(tmp_path, monkeypatch, compiled_solver):
     import spinnme.train.me_atmosphere as atmosphere_module
     monkeypatch.setattr(atmosphere_module, 'compiled_profile_solver', lambda mode: compiled_solver)
-    options = dict(accelerator='cpu', devices=1, logger=False, enable_checkpointing=False,
-                   enable_model_summary=False, enable_progress_bar=False, num_sanity_val_steps=0)
+    options = {'accelerator': 'cpu', 'devices': 1, 'logger': False, 'enable_checkpointing': False,
+                   'enable_model_summary': False, 'enable_progress_bar': False, 'num_sanity_val_steps': 0}
     module = _module(None, compile_config={'me_solver': True})
     loader = DataLoader([_physical_batch() for _ in range(3)], batch_size=None)
     trainer = Trainer(max_steps=2, **options)

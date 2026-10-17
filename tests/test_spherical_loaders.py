@@ -1,29 +1,18 @@
+import json
 from datetime import datetime
 
-import json
-
 import numpy as np
-
 import pytest
-
 import torch
-
-
 from astropy.io import fits
 
-
+from spinnme.data.hmi_time import load_hmi_date_obs_map
 from spinnme.data.hmi_transmission import (
     MANIFEST_FORMAT,
     hmi_acquisition_key,
     resolve_hmi_transmission_profile,
 )
-
-from spinnme.data.hmi_time import load_hmi_date_obs_map
-
 from spinnme.instrument import hmi_wavelength_config
-
-
-
 from spinnme.loader.spherical import (
     HMISphericalDataset,
     SphericalDataModule,
@@ -31,8 +20,8 @@ from spinnme.loader.spherical import (
     load_hmi_detector_coords,
     sample_hmi_spectral_response,
 )
-
 from spinnme.train.data_loader import TimeStratifiedBatchSampler
+
 
 def _create_segment_files(directory, acquisition, num_wl=6):
     for stokes_id in 'IQUV':
@@ -429,7 +418,8 @@ def test_hmi_loader_needs_no_observer_velocity_keywords(tmp_path):
 
 def test_hmi_response_cache_reloads_replaced_calibration(tmp_path, monkeypatch):
     import os
-    import spinnme.loader.spherical as spherical
+
+    from spinnme.loader import spherical
     profile = tmp_path/'response.npz'
     def write(values):
         np.savez(profile, offsets=np.tile([-.1, .1], (6, 1)).astype('f4'),
@@ -458,7 +448,8 @@ def test_hmi_response_cache_reloads_replaced_calibration(tmp_path, monkeypatch):
 @pytest.mark.parametrize('compressed', [False, True])
 def test_hmi_alignment_checks_only_headers(tmp_path, monkeypatch, compressed):
     from test_fits_observations import header
-    import spinnme.loader.spherical as spherical
+
+    from spinnme.loader import spherical
     paths = []
     for index in range(2):
         path = tmp_path/f'plane{index}.fits'

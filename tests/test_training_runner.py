@@ -4,10 +4,10 @@ import json
 from pathlib import Path
 
 import pytest
+from _training_helpers import _module, _physical_batch
 from pytorch_lightning import LightningDataModule
 from torch.utils.data import DataLoader
 
-from _training_helpers import _module, _physical_batch
 from spinnme.training import runner
 
 
@@ -37,7 +37,7 @@ def configuration(directory):
 
 
 def test_one_step_cpu_run_saves_final_snapshot_without_network(tmp_path, monkeypatch):
-    import spinnme.snapshots as snapshots
+    from spinnme import snapshots
     monkeypatch.setattr(runner, 'load_or_prepare_data_module', lambda config, work_directory, reload=False: PreparedData(work_directory))
     saved = []
     def save(module, data, config, path):
@@ -46,7 +46,7 @@ def test_one_step_cpu_run_saves_final_snapshot_without_network(tmp_path, monkeyp
     monkeypatch.setattr(snapshots, 'save_snapshot', save)
     config = configuration(tmp_path)
     unchanged = copy.deepcopy(config)
-    module, data, trainer = runner.run(config)
+    _module, _data, trainer = runner.run(config)
     assert trainer.global_step == 1
     assert saved[-1] == tmp_path / 'inversion.pme'
     assert config == unchanged
@@ -106,8 +106,9 @@ def test_input_inventory_records_unique_paths_without_accessing_files(tmp_path):
 
 def test_final_checkpoint_matches_snapshot_between_validation_boundaries(tmp_path):
     import torch
-    from spinnme.data.circular import create_circular_dataset
+
     from spinnme.configuration import resolve_config
+    from spinnme.data.circular import create_circular_dataset
     from spinnme.snapshots import Snapshot
     config_path = create_circular_dataset(tmp_path/'data', size=8, frames=1)
     config = resolve_config(config_path, output=str(tmp_path/'run'), overrides=[

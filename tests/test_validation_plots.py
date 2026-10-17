@@ -6,12 +6,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 import torch
+from _training_helpers import _module, _physical_batch
 from PIL import Image
 from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import WandbLogger
 from torch.utils.data import DataLoader
 
-from _training_helpers import _module, _physical_batch
 from spinnme.train.me_spherical_module import MESphericalModule
 
 

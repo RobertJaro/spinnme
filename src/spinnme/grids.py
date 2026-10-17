@@ -134,8 +134,13 @@ class GridGeometry:
     def points(self, coordinates, *, Rs_per_ds, normalized_time):
         """Physical SkyCoord positions in the selected observing frame."""
         from sunpy.coordinates import frames
-        from .data.util import (spherical_to_cartesian, cartesian_to_spherical_matrix,
-                                image_to_spherical_matrix, observer_ray_and_mu)
+
+        from .data.util import (
+            cartesian_to_spherical_matrix,
+            image_to_spherical_matrix,
+            observer_ray_and_mu,
+            spherical_to_cartesian,
+        )
         carrington = coordinates.transform_to(frames.HeliographicCarrington(
             observer=self.map.observer_coordinate, obstime=self.map.date))
         lon, lat = carrington.lon.to_value(u.rad), carrington.lat.to_value(u.rad)

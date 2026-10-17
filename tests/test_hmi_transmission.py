@@ -7,8 +7,8 @@ import pytest
 from astropy.io import fits
 
 from spinnme.data.hmi_transmission import (
-    DEFAULT_BLOCKER_TAIL_SIGMA,
     DEFAULT_BLOCKER_FWHM,
+    DEFAULT_BLOCKER_TAIL_SIGMA,
     DEFAULT_CONTINUUM_PANEL_NODES,
     DEFAULT_CONTINUUM_PANEL_WIDTH,
     DEFAULT_PROFILE_HALF_WIDTH,
@@ -16,15 +16,14 @@ from spinnme.data.hmi_transmission import (
     HMI_UNTUNED_CENTER,
     MANIFEST_FORMAT,
     build_hmi_transmission_profiles,
-    download_phase_map,
     discover_hmi_acquisitions,
+    download_phase_map,
     format_jsoc_time,
     load_hmi_transmission_manifest,
     prepare_hmi_transmission_directory,
     resolve_hmi_phase_map,
     write_transmission_file,
 )
-
 
 PHASE_METADATA = {
     'T_REC': '2023.10.10_19:26:26_TAI',

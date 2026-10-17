@@ -1,6 +1,6 @@
+import math
 from collections.abc import Iterable
 from copy import deepcopy
-import math
 
 import torch
 import torch.nn.functional as F

@@ -13,7 +13,7 @@ from astropy import constants as const
 from astropy import units as u
 from torch import nn
 
-from spinnme.train.atomic_functions import load_zeeman_lookup, get_zeeman_lookup_id
+from spinnme.train.atomic_functions import get_zeeman_lookup_id, load_zeeman_lookup
 from spinnme.train.profile_functions import Voigt
 
 

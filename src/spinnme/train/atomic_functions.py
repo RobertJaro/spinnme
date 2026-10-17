@@ -32,20 +32,19 @@ def threej(j1, j2, j3, m1, m2, m3):
     if ((j1 + j2 - j3) < 0):
         return 0
 
-    if ((j2 + j3 - j1)) < 0:
+    if (j2 + j3 - j1) < 0:
         return 0
 
-    if ((j3 + j1 - j2)) < 0:
+    if (j3 + j1 - j2) < 0:
         return 0
 
-    if ((m1 + m2 + m3)) != 0:
+    if (m1 + m2 + m3) != 0:
         return 0
 
     kmin1 = j3 - j1 - m2
     kmin2 = j3 - j2 + m1
     kmin = -1 * np.minimum(kmin1, kmin2)
-    if (kmin < 0):
-        kmin = 0
+    kmin = max(kmin, 0)
     kmax1 = j1 + j2 - j3
     kmax2 = j1 - m1
     kmax3 = j2 + m2
@@ -125,7 +124,7 @@ def load_zeeman_lookup(j_up, j_low):
     lookup = {}
     assert (2 * j_up + 1) % 1 == 0, 'nUp must be integer'
     nUp = int(2 * j_up + 1)
-    for iUp in range(0, nUp):
+    for iUp in range(nUp):
         MUp = j_up - iUp
 
         iLow = 1

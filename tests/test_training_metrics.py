@@ -2,9 +2,9 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import torch
+from _training_helpers import _module, _physical_batch
 
 from spinnme.train.metrics import TrainingMetricWindow
-from _training_helpers import _module, _physical_batch
 
 
 def test_window_detaches_and_averages_in_one_collective(monkeypatch):

@@ -8,21 +8,20 @@ in radians and all time/radius quantities are already in model-normalized units.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import math
+from dataclasses import dataclass
 from typing import Literal
 
 import torch
 import torch.distributed as dist
 
-
 __all__ = [
     "LongitudeInterval",
-    "SphericalCollocationDomain",
-    "SphericalCollocationConfig",
-    "SphericalCollocationBatch",
     "SmoothSphericalCollocationSampler",
+    "SphericalCollocationBatch",
+    "SphericalCollocationConfig",
+    "SphericalCollocationDomain",
 ]
 
 
@@ -86,7 +85,7 @@ class LongitudeInterval:
         return (self.center + math.pi) % _TWO_PI - math.pi
 
     @classmethod
-    def from_unwrapped_bounds(cls, lower: float, upper: float) -> "LongitudeInterval":
+    def from_unwrapped_bounds(cls, lower: float, upper: float) -> LongitudeInterval:
         """Construct from explicit continuous bounds, which may cross ``pi``."""
         lower, upper = _interval(
             "unwrapped longitude bounds",
@@ -96,7 +95,7 @@ class LongitudeInterval:
         return cls(center=(lower + upper) / 2.0, width=upper - lower)
 
     @classmethod
-    def shortest_arc(cls, first: float, second: float) -> "LongitudeInterval":
+    def shortest_arc(cls, first: float, second: float) -> LongitudeInterval:
         """Construct the shorter seam-safe arc connecting two wrapped angles.
 
         Antipodal endpoints are ambiguous and must instead be supplied as
@@ -166,7 +165,7 @@ class SphericalCollocationDomain:
         longitude,
         surface_radius: float = 1.0,
         shell_height: float = 0.01,
-    ) -> "SphericalCollocationDomain":
+    ) -> SphericalCollocationDomain:
         """Construct a shell whose inner boundary is the model's solar surface."""
         surface_radius = _finite_float("surface_radius", surface_radius)
         shell_height = _finite_float("shell_height", shell_height)

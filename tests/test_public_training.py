@@ -3,12 +3,12 @@ import copy
 
 import pytest
 import torch
+from _training_helpers import _module, _physical_batch
 from astropy import units as u
 
 from spinnme.instrument import hmi_wavelength_config
 from spinnme.train.artifact_correction import ArtifactCorrectionModule
 from spinnme.train.me_spherical_module import MESphericalModule
-from _training_helpers import _module, _physical_batch
 
 
 def multiline_module(**kwargs):

@@ -8,20 +8,21 @@ from __future__ import annotations
 
 import copy
 import csv
-from datetime import datetime, timezone
 import hashlib
-from importlib import metadata
 import json
 import math
 import platform
 import re
-from pathlib import Path
+from datetime import UTC, datetime
 from glob import escape as glob_escape
+from importlib import metadata
+from pathlib import Path
 
 import numpy as np
 
+
 def _utc_now():
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _checksum(path):
@@ -137,7 +138,7 @@ def _finite(value, label, *, positive=False, nonnegative=False):
 
 def _bins(value, step, label, *, positive=False):
     value = _finite(value, label, positive=positive, nonnegative=not positive)
-    bins = int(round(value / step))
+    bins = round(value / step)
     if not np.isclose(bins * step, value, rtol=1e-10, atol=1e-9):
         raise ValueError(f"{label} must be an integer multiple of base_step_seconds.")
     return bins
@@ -204,7 +205,7 @@ def _validate(spec):
     variants = acquisition.get("variants")
     if not isinstance(variants, list) or not variants:
         raise ValueError("acquisition.variants must be a nonempty list.")
-    normalized, names, ticks = [], set(), set(2 * i + 1 for i in range(count))
+    normalized, names, ticks = [], set(), {2 * i + 1 for i in range(count)}
     for original in variants:
         if not isinstance(original, dict):
             raise ValueError("Each acquisition variant must be a mapping.")
@@ -329,6 +330,7 @@ def _canonical_truth(parameters, profiles, mask, header, center, offsets, time):
     from astropy import units as u
     from sunpy.coordinates import frames
     from sunpy.map import Map, all_coordinates_from_map
+
     from spinnme.data.differential_rotation import carrington_rotation_velocity
 
     arrays = {name: value.detach().cpu().numpy() if hasattr(value, "detach") else np.asarray(value)
@@ -406,6 +408,7 @@ def generate_dataset(spec: dict, output: str | Path) -> Path:
 
     from astropy import units as u
     from astropy.io import fits
+
     from spinnme.data.create_spherical_test_set import SphericalTestSetGenerator
     from spinnme.instrument import hmi_wavelength_config
 
@@ -504,7 +507,7 @@ def generate_dataset(spec: dict, output: str | Path) -> Path:
                     average, header = hdus[0].data.copy(), hdus[0].header.copy()
                     mask = hdus["VALID_MASK"].data.astype(bool)
                 exposure_bins = len(record["base_bin_indices"])
-                tick = int(round(record["time_seconds"] / config["step"] * 2))
+                tick = round(record["time_seconds"] / config["step"] * 2)
                 normal = _noise(seed, tick, exposure_bins, average.shape)
                 sigma = np.asarray(variant["effective_noise_std"])[:, None, None, None] * config["continuum"]
                 noisy = np.asarray(average + normal * sigma, dtype=np.float32)

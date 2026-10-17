@@ -43,8 +43,8 @@ def test_invalid_pixels_do_not_contaminate_neighbors():
     assert np.isfinite(score[20, 21])
 
 
-@pytest.mark.parametrize('kwargs', [dict(fraction=0), dict(fraction=1),
-                                   dict(smoothing_sigma=0), dict(radius_limit=1.1)])
+@pytest.mark.parametrize('kwargs', [{'fraction': 0}, {'fraction': 1},
+                                   {'smoothing_sigma': 0}, {'radius_limit': 1.1}])
 def test_filter_rejects_invalid_settings(kwargs):
     with pytest.raises(ValueError):
         polarization_selection(*scene(), **kwargs)
@@ -70,9 +70,9 @@ def test_two_config_sampler_keeps_half_batches_and_ddp_sharding(monkeypatch):
         assert all(i < 2 for i, _ in batch[:4])
         assert all(i >= 2 for i, _ in batch[4:])
         assert sum(i == 2 for i, _ in batch[4:]) == 2
-    assert len(set(index for b in all_batches for index in b[:4])) == 24
+    assert len({index for b in all_batches for index in b[:4]}) == 24
     for rank in range(2):
-        monkeypatch.setattr(TimeStratifiedBatchSampler, '_distributed_context', staticmethod(lambda: (rank, 2)))
+        monkeypatch.setattr(TimeStratifiedBatchSampler, '_distributed_context', staticmethod(lambda rank=rank: (rank, 2)))
         sampler = make()
         assert len(sampler) == 3
         assert list(sampler) == all_batches[rank::2]
@@ -83,6 +83,7 @@ def test_hmi_filter_precedes_shuffle_and_preserves_profiles(tmp_path, monkeypatc
     from astropy.coordinates import SkyCoord
     from sunpy.coordinates import frames
     from sunpy.map import Map, make_fitswcs_header
+
     import spinnme.loader.spherical as loader
     from spinnme.train.data_loader import TensorsDataset
 
@@ -110,7 +111,7 @@ def test_hmi_filter_precedes_shuffle_and_preserves_profiles(tmp_path, monkeypatc
         real_init(self, tensors=tensors, **kwargs)
     monkeypatch.setattr(TensorsDataset, '__init__', capture)
     datasets = []
-    for config in [None, dict(smoothing_sigma=5, fraction=.1, radius_limit=.95)]:
+    for config in [None, {'smoothing_sigma': 5, 'fraction': .1, 'radius_limit': .95}]:
         datasets.append(loader.HMISphericalDataset(
             np.full((4, 6), str(segment_path)), 'calibration', polarization_filter=config,
             ds_id='test', instrument_id='HMI', seconds_per_dt=3600, Rs_per_ds=1,
