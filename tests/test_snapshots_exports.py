@@ -40,7 +40,7 @@ def test_explicit_cpu_snapshot_override_is_retained_when_cuda_available(saved_sn
 
 
 @pytest.fixture
-def saved_snapshot(tmp_path, request):
+def saved_snapshot(tmp_path):
     torch.manual_seed(3)
     shape = (7, 9)
     reference = SkyCoord(0 * u.arcsec, 0 * u.arcsec, observer="earth", obstime="2024-03-23T01:00:00", frame="helioprojective")
@@ -50,8 +50,6 @@ def saved_snapshot(tmp_path, request):
     config = {"model": {"type": "mlp", "dim": 16, "n_layers": 2, "encoding_config": {"type": "identity"}},
               "instrument": [{"type": "generic", "instrument_id": "USER", "line_id": "fe-i-6173", "artifact_correction": True}],
               "stokes_loss": {"type": "mse", "continuum_normalization": True}, "data": {}, "training": {"max_steps": 2}}
-    if getattr(request, "param", False):
-        config["model"]["disambiguation"] = True
     module = MESphericalModule(image_shape=shape, wavelength_config=wavelengths, gauss_per_dB=1000,
                                Rs_per_ds=1., seconds_per_dt=3600, model_config=config["model"],
                                instrument_config=config["instrument"], stokes_loss_config=config["stokes_loss"])
@@ -452,18 +450,3 @@ def test_multinstrument_state_and_explicit_instrument_selection(saved_snapshot, 
         result = snapshot.evaluate('example', instrument_id='OTHER', parameters=['Brtp', 'IQUV'])
         assert result.metadata['instrument_id'] == 'OTHER'
         assert result.arrays['I'].shape == (7, 9, 5)
-
-
-@pytest.mark.parametrize('saved_snapshot', [True], indirect=True)
-def test_rotation_export_preserves_physical_vectors_and_separates_forward_azimuth(saved_snapshot):
-    with spinnme.load(saved_snapshot[0], device='cpu') as snapshot:
-        result = snapshot.evaluate(parameters=[
-            'B_image_x', 'B_image_y', 'azimuth', 'azi', 'forward_azi', 'disambiguation_angle'])
-        values = result.arrays
-        physical_angle = np.arctan2(-values['B_image_x'], values['B_image_y'])
-        np.testing.assert_allclose(values['azi'], physical_angle, atol=1e-6)
-        np.testing.assert_allclose(values['azimuth'], np.rad2deg(physical_angle) % 180, atol=2e-5)
-        synthesis_angle = physical_angle + values['disambiguation_angle']
-        np.testing.assert_allclose(np.sin(values['forward_azi']), np.sin(synthesis_angle), atol=1e-6)
-        np.testing.assert_allclose(np.cos(values['forward_azi']), np.cos(synthesis_angle), atol=1e-6)
-        assert result.units['disambiguation_angle'] == 'rad'

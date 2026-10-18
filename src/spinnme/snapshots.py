@@ -457,12 +457,9 @@ class Snapshot(SphericalSynthesis):
                             **{key: b_img[..., i] for i, key in enumerate(("B_image_x", "B_image_y", "B_los"))},
                             "B": forward["b_field"], "B_transverse": torch.linalg.vector_norm(b_img[..., :2], dim=-1),
                             "inclination": forward["inc"] * 180 / np.pi,
-                            "azi": transformed["azi_physical"],
-                            "azimuth": torch.remainder(transformed["azi_physical"] * 180 / np.pi, 180),
+                            "azimuth": torch.remainder(forward["azi"] * 180 / np.pi, 180),
                             "v_los": -transformed["v_img"][..., 2] * self.meters_per_ds / self.seconds_per_dt,
                             "mu": tensor("mu")}
-            if 'disambiguation_angle' in raw:
-                products['disambiguation_angle'] = raw['disambiguation_angle']
             products['Blos'] = products['B_los']
             products['Vdop'] = products['v_los']
             products = {key: value.detach().cpu().numpy() for key, value in products.items()}

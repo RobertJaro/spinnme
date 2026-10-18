@@ -5,7 +5,7 @@ Install a development environment with Python 3.11 or later:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -e '.[dev,download,synthetic,docs]'
+python -m pip install -e '.[dev,download,synthetic,docs,wandb]'
 python -m pytest
 python -m build
 sphinx-build -W --keep-going -b html docs docs/_build/html
@@ -13,7 +13,13 @@ sphinx-build -W --keep-going -b html docs docs/_build/html
 
 Install the appropriate CPU/CUDA PyTorch distribution for your machine before
 installing SPINNME. Keep machine-specific CUDA choices outside library dependency
-metadata. CI tests Python 3.11 and 3.12; accelerator studies need separate validation.
+metadata. CI runs a focused configuration, CLI, synthesis, spectral-response, and
+Stokes-loss subset on Python 3.11 and 3.12, plus lint, package, installed-wheel
+training/export, and documentation checks. The test file list is maintained in
+`.github/workflows/ci.yml`. Run `python -m pytest` locally for the full scientific
+suite, including ingestion, training, and validation plots; the latter require the
+optional `wandb` dependency included above. Accelerator studies need separate
+validation.
 
 Changes to coordinate frames, signs, normalization, synthesis, losses, response
 models, or snapshots need scientific regression tests. Include numerical parity

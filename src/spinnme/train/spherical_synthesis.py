@@ -14,27 +14,16 @@ def transform_spherical_parameters(output, coords, cartesian_to_spherical_transf
     b_rtp = torch.einsum("...ij,...j->...i", cartesian_to_spherical_transform, b_xyz)
     b_img = torch.einsum("...ij,...j->...i", rtp_to_img_transform, b_rtp)
 
-    # Physics and exported vector components retain the original field. Only
-    # the observer-frame field used by the radiative transfer is rotated.
-    b_synthesis_img = b_img
-    rotation = output.get('disambiguation_angle')
-    if rotation is not None:
-        cos_angle, sin_angle = torch.cos(rotation), torch.sin(rotation)
-        bx, by, blos = b_img.split(1, dim=-1)
-        b_synthesis_img = torch.cat((cos_angle * bx - sin_angle * by,
-                                    sin_angle * bx + cos_angle * by, blos), dim=-1)
-
     b_field2 = b_img.square().sum(dim=-1, keepdim=True)
     b_field = torch.linalg.vector_norm(b_img, dim=-1, keepdim=True)
     transverse_b2 = b_img[..., 0:1].square() + b_img[..., 1:2].square()
     field_denominator = b_field2 + 1e-8
     sin_inc2 = transverse_b2 / field_denominator
     cos_inc = b_img[..., 2:3] / (b_field + 1e-8)
-    bx_synth, by_synth = b_synthesis_img[..., 0:1], b_synthesis_img[..., 1:2]
-    sin_inc2_sin2azi = -2 * bx_synth * by_synth / field_denominator
-    sin_inc2_cos2azi = -(bx_synth.square() - by_synth.square()) / field_denominator
+    sin_inc2_sin2azi = -2 * b_img[..., 0:1] * b_img[..., 1:2] / field_denominator
+    sin_inc2_cos2azi = -(b_img[..., 0:1].square() - b_img[..., 1:2].square()) / field_denominator
     inc = acos_safe(cos_inc)
-    azi = atan2_safe(-bx_synth, by_synth)
+    azi = atan2_safe(-b_img[..., 0:1], b_img[..., 1:2])
 
     spherical_coords = cartesian_to_spherical(coords[..., :3], torch)
     latitude = torch.pi / 2 - spherical_coords[..., 1]
@@ -53,7 +42,6 @@ def transform_spherical_parameters(output, coords, cartesian_to_spherical_transf
         'sin_inc2_sin2azi': sin_inc2_sin2azi,
         'sin_inc2_cos2azi': sin_inc2_cos2azi,
         'azi': azi,
-        'azi_physical': atan2_safe(-b_img[..., 0:1], b_img[..., 1:2]),
         'sin_inc2': sin_inc2,
         'cos_inc': cos_inc,
         'inc': inc,
@@ -62,7 +50,6 @@ def transform_spherical_parameters(output, coords, cartesian_to_spherical_transf
         'b_rtp': b_rtp,
         'v_img': v_img,
         'b_img': b_img,
-        'b_synthesis_img': b_synthesis_img,
         'v_xyz': v_xyz,
         'b_xyz': b_xyz,
     }

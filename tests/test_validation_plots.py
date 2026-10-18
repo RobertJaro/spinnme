@@ -96,11 +96,9 @@ def validation_batch():
 
 
 @pytest.mark.parametrize('enabled', [True, False])
-@pytest.mark.parametrize('disambiguation', [True, False])
-def test_validation_images_follow_interval_and_training_steps(tmp_path, enabled, disambiguation):
+def test_validation_images_follow_interval_and_training_steps(tmp_path, enabled):
     config = _module().snapshot_init
     config['plot_validation'] = enabled
-    config['model_config']['disambiguation'] = disambiguation
     config['instrument_config'][0].update(limb_correction=True, artifact_correction=True)
     module = MESphericalModule(**config)
     logger = ImageRecorder()
@@ -112,10 +110,6 @@ def test_validation_images_follow_interval_and_training_steps(tmp_path, enabled,
     valid = DataLoader([validation_batch()], batch_size=None)
     trainer.fit(module, train_dataloaders=train, val_dataloaders=valid)
     assert trainer.global_step == 4
-    coherence_key = 'valid.disambiguation.circular_coherence'
-    assert (coherence_key in trainer.callback_metrics) == disambiguation
-    if disambiguation:
-        assert 0 <= trainer.callback_metrics[coherence_key] <= 1.000001
     if enabled:
         expected = {'Parameter Overview', 'B', 'B_rtp', 'v', 'Limb Correction Factors',
                     'Artifact leakage and correction gate', 'Integrated Stokes vector - Comparison',

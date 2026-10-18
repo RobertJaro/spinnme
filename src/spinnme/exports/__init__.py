@@ -43,7 +43,7 @@ def parameter_units(name):
         return "m / s"
     if name in {"inclination", "azimuth"}:
         return "deg"
-    if name in {"inc", "azi", "disambiguation_angle"}:
+    if name in {"inc", "azi"}:
         return "rad"
     return "1"
 

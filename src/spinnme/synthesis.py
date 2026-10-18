@@ -221,7 +221,7 @@ class SphericalSynthesis:
                     append(f'raw_{key}' if key in forward_params else key, value)
             for key, value in forward_params.items():
                 append(key, value)
-            for key in ('b_rtp', 'b_img', 'b_synthesis_img'):
+            for key in ('b_rtp', 'b_img'):
                 append(key, transformed[key] * self.gauss_per_dB)
             for key in ('v_rtp', 'v_img'):
                 append(key, transformed[key] * self.meters_per_ds / self.seconds_per_dt)

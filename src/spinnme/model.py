@@ -278,7 +278,7 @@ class SirenModel(nn.Module):
 class _BaseMESphericalModel:
 
     def __init__(self, vector_potential=False, b_sinh_scale=None, v_sinh_scale=None,
-                 source_function='independent', disambiguation=False):
+                 source_function='independent'):
         if b_sinh_scale is not None and b_sinh_scale <= 0:
             raise ValueError('b_sinh_scale must be positive or None.')
         if v_sinh_scale is not None and v_sinh_scale <= 0:
@@ -290,39 +290,10 @@ class _BaseMESphericalModel:
             )
         if source_function not in ('independent', 'ratio'):
             raise ValueError('source_function must be independent or ratio.')
-        if not isinstance(disambiguation, bool):
-            raise ValueError('disambiguation must be a boolean.')
-        self.disambiguation = disambiguation
         self.source_function = source_function
         self.vector_potential = vector_potential
         self.b_sinh_scale = b_sinh_scale
         self.v_sinh_scale = v_sinh_scale
-
-    def _initialize_disambiguation_output(self):
-        """Initialize the linear angle readout around 0.5 radians.
-
-        Calibrate only this output row on a unit shell. This compensates for
-        near-constant initial features in deep MLPs, without a fixed phase,
-        extra coordinate encoding, or activation on the learned output.
-        """
-        if not self.disambiguation:
-            return
-        with torch.no_grad():
-            unit = torch.quasirandom.SobolEngine(4).draw(1024)
-            longitude = 2 * torch.pi * unit[:, 0]
-            sin_latitude = 2 * unit[:, 1] - 1
-            cos_latitude = torch.sqrt(1 - sin_latitude.square())
-            radius = 1 + .1 * unit[:, 2]
-            coords = torch.stack((radius * cos_latitude * longitude.cos(),
-                                  radius * cos_latitude * longitude.sin(),
-                                  radius * sin_latitude, unit[:, 3]), dim=-1)
-            features = self.features(coords)
-            weight = self.out_layer.weight[-1:]
-            values = F.linear(features, weight)
-            # A uniform [0,1] readout has std=1/sqrt(12). The output remains
-            # unbounded, so individual initial values can exceed that range.
-            weight.mul_((1 / math.sqrt(12)) / values.std(unbiased=False).clamp_min(1e-8))
-            self.out_layer.bias[-1] = .5 - F.linear(features, weight).mean()
 
     def _scale_magnetic_vector(self, b):
         if self.b_sinh_scale is None:
@@ -336,8 +307,7 @@ class _BaseMESphericalModel:
 
     def _decode_output(self, params, x):
         ratio_source = self.source_function == 'ratio'
-        n_atmosphere_outputs = 10 if ratio_source else 11
-        n_outputs = n_atmosphere_outputs + int(self.disambiguation)
+        n_outputs = 10 if ratio_source else 11
         if params.shape[-1] != n_outputs:
             raise RuntimeError(
                 f'Expected {n_outputs} spherical atmosphere outputs, '
@@ -375,11 +345,9 @@ class _BaseMESphericalModel:
             'v_x': v[..., 0:1],
             'v_y': v[..., 1:2],
             'v_z': v[..., 2:3],
-            'kl': 1e-3 + F.softplus(params[..., n_atmosphere_outputs - 1:n_atmosphere_outputs]),
+            'kl': 1e-3 + F.softplus(params[..., -1:]),
             'a_jac_matrix': a_jac_matrix,
         }
-        if self.disambiguation:
-            output['disambiguation_angle'] = params[..., n_atmosphere_outputs:n_outputs]
         return output
 
 
@@ -430,15 +398,14 @@ class MESphericalModel(MLPModel, _BaseMESphericalModel, _LineAtmospheres):
 
     def __init__(self, vector_potential=False, b_sinh_scale=None,
                  v_sinh_scale=None, source_function='independent', line_ids=None,
-                 instrument_lines=None, disambiguation=False, **kwargs):
+                 instrument_lines=None, **kwargs):
         _BaseMESphericalModel.__init__(
             self, vector_potential=vector_potential,
             b_sinh_scale=b_sinh_scale, v_sinh_scale=v_sinh_scale,
-            source_function=source_function, disambiguation=disambiguation,
+            source_function=source_function,
         )
-        MLPModel.__init__(self, in_dim=4, out_dim=(10 if source_function == 'ratio' else 11) + int(disambiguation), **kwargs)
+        MLPModel.__init__(self, in_dim=4, out_dim=10 if source_function == 'ratio' else 11, **kwargs)
         self._configure_line_heads(line_ids, instrument_lines)
-        self._initialize_disambiguation_output()
 
     def forward(self, x, instrument_id=None, line_id=None):
         return self._line_forward(x, instrument_id=instrument_id, line_id=line_id)
@@ -448,15 +415,14 @@ class MESphericalSirenModel(SirenModel, _BaseMESphericalModel, _LineAtmospheres)
 
     def __init__(self, vector_potential=False, b_sinh_scale=None,
                  v_sinh_scale=None, source_function='independent', line_ids=None,
-                 instrument_lines=None, disambiguation=False, **kwargs):
+                 instrument_lines=None, **kwargs):
         _BaseMESphericalModel.__init__(
             self, vector_potential=vector_potential,
             b_sinh_scale=b_sinh_scale, v_sinh_scale=v_sinh_scale,
-            source_function=source_function, disambiguation=disambiguation,
+            source_function=source_function,
         )
-        SirenModel.__init__(self, in_dim=4, out_dim=(10 if source_function == 'ratio' else 11) + int(disambiguation), **kwargs)
+        SirenModel.__init__(self, in_dim=4, out_dim=10 if source_function == 'ratio' else 11, **kwargs)
         self._configure_line_heads(line_ids, instrument_lines)
-        self._initialize_disambiguation_output()
 
     def forward(self, x, instrument_id=None, line_id=None):
         return self._line_forward(x, instrument_id=instrument_id, line_id=line_id)

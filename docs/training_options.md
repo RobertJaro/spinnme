@@ -227,38 +227,3 @@ whole solar sphere. `radial_measure: volume` samples uniformly in volume
 (uniform longitude, sin(latitude), and radius cubed). Data continue to constrain
 the photosphere while physics constrains the shell. These constraints alone
 do not specify a unique coronal solution or impose upper/side boundary data.
-
-
-### Optional synthesis rotation mask
-
-Set `model.disambiguation: true` to predict `disambiguation_angle` alongside
-the ME atmosphere. It defaults to false. This is a continuous angle in radians,
-not a binary 180-degree mask. After transforming the physical field into the
-observer's detector frame, synthesis uses
-`Bx_synth = cos(a)*Bx - sin(a)*By`,
-`By_synth = sin(a)*Bx + cos(a)*By`, and `Blos_synth = Blos`.
-Field strength and inclination remain unchanged. Physics constraints always
-use the original Cartesian B, with no dependence on the rotation output.
-
-The model adds exactly one linear output to its shared ME readout:
-`angle = raw_output` in radians. There is no sigmoid, extra coordinate
-encoding, fixed random phase, or separate residual output. The angle is
-unbounded; sine and cosine apply periodicity during synthesis. Initialization
-rescales only this output row on sampled coordinates in a unit shell to center
-it around 0.5 radians with an initial spread roughly covering 0 to 1 radian.
-This is an initialization heuristic, not a bound or training penalty.
-The angle learns through the Stokes loss; no binary restriction, angle penalty
-or additional physics term is imposed. MLP, SIREN, direct-B and vector-potential
-models support the option.
-
-When enabled, the parameter validation overview displays the angle using a
-cyclic color scale from 0 to 2*pi and labels the fitted azimuth as Synthesis
-Azimuth. `valid.disambiguation.circular_coherence` monitors angular coverage:
-1 indicates a constant rotation and 0 indicates broad circular coverage.
-Magnetic vector maps retain the original field. Saved-snapshot
-synthesis applies the same rotation; `disambiguation_angle` can also be exported
-as a map in radians. Intrinsic `azi`/`azimuth` exports describe the physical
-field, while `forward_azi` describes the rotated synthesis field. Enable this
-option in a fresh run because it adds trainable parameters to the checkpoint.
-Use a fresh run when replacing a previous separate rotation head; its checkpoint
-has a different output shape and parameterization.

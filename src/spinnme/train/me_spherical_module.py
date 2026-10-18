@@ -659,8 +659,6 @@ class MESphericalModule(LightningModule):
                'mu': mu, 'v_obs_los': v_obs_los,
                'v_obs_correction': v_obs_correction,
                }
-        if 'disambiguation_angle' in output:
-            res['disambiguation_angle'] = output['disambiguation_angle']
         if limb_correction is not None:
             res['c_b0'] = limb_correction['c_b0']
             res['c_b1'] = limb_correction['c_b1']
@@ -732,7 +730,7 @@ class MESphericalModule(LightningModule):
                       'v_rtp', 'b_rtp', 'v_img', 'b_img', 'v_obs_correction',
                       'induction', 'dB_dt', 'curl_VxB', 'divergence', 'force_free', 'dB_dr', 'mu', 'v_obs_los',
                       'c_b0', 'c_b1', 'c_vmac', 'c_damping', 'c_kl', 'c_vdop',
-                      'limb_filling_factor', 'disambiguation_angle']:
+                      'limb_filling_factor']:
                 if k not in outputs:
                     continue
                 v = outputs[k].reshape(*self.image_shape[:2], -1).numpy()
@@ -767,12 +765,6 @@ class MESphericalModule(LightningModule):
             # 'valid.divergence': torch.nanmean(outputs['divergence']),
             # 'valid.force_free': torch.nanmean(outputs['force_free']),
         }
-        if 'disambiguation_angle' in outputs and torch.any(objective_valid):
-            angles = outputs['disambiguation_angle'].reshape(-1)[objective_valid]
-            # 1 means a spatially constant rotation; 0 means broad circular
-            # coverage. Unlike an ordinary standard deviation this is wrap-safe.
-            validation_metrics['valid.disambiguation.circular_coherence'] = torch.hypot(
-                angles.cos().mean(), angles.sin().mean())
         self.log_dict(validation_metrics)
 
     def _validation_image_logger(self):
@@ -995,7 +987,7 @@ class MESphericalModule(LightningModule):
         plt.colorbar(im, cax=cax)
         ax = axs[0, 2]
         im = ax.imshow(azi % (2 * np.pi), cmap='twilight', vmin=0, vmax=2 * np.pi, origin='lower')
-        ax.set_title('Synthesis Azimuth' if 'disambiguation_angle' in parameters else 'Azimuth')
+        ax.set_title('Azimuth')
         divider = make_axes_locatable(ax)
         cax = divider.append_axes('right', size='5%', pad=0.05)
         plt.colorbar(im, cax=cax)
@@ -1024,15 +1016,7 @@ class MESphericalModule(LightningModule):
         cax = divider.append_axes('right', size='5%', pad=0.05)
         plt.colorbar(im, cax=cax)
         ax = axs[1, 2]
-        if 'disambiguation_angle' in parameters:
-            im = ax.imshow(parameters['disambiguation_angle'] % (2 * np.pi),
-                           cmap='twilight', vmin=0, vmax=2 * np.pi, origin='lower')
-            ax.set_title('LOS rotation [rad]')
-            divider = make_axes_locatable(ax)
-            cax = divider.append_axes('right', size='5%', pad=0.05)
-            plt.colorbar(im, cax=cax)
-        else:
-            ax.set_axis_off()
+        ax.set_axis_off()
         ax = axs[1, 3]
         vdop_max = np.nanmax(np.abs(parameters['vdop']))
         im = ax.imshow(parameters['vdop'], cmap='seismic_r', vmin=-vdop_max, vmax=vdop_max, origin='lower')
