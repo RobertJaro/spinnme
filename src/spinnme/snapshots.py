@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import tempfile
+import warnings
 from copy import deepcopy
 from dataclasses import fields, is_dataclass
 from datetime import datetime
@@ -18,9 +19,10 @@ from astropy.time import Time
 
 from . import __version__
 from .configuration import config_hash
+from .conventions import COORDINATE_CONVENTION_VERSION, AZIMUTH_CONVENTION
 from .synthesis import SphericalSynthesis
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 
 
 def encode(value):
@@ -128,7 +130,10 @@ def save_snapshot(me_module, data_module, config, path):
         "spectral_response_by_acquisition": response_mapping,
         "stokes_normalization_by_instrument": getattr(data_module, "stokes_normalization_by_instrument", {}),
         "data_cache_signature": getattr(data_module, "cache_signature", None),
-        "conventions": {"Btheta": "increasing colatitude (southward)", "Bphi": "increasing Carrington longitude",
+        "conventions": {"version": me_module.coordinate_convention_version,
+                        "azimuth": AZIMUTH_CONVENTION,
+                        "hinode_polarization": "solar east-west" if me_module.coordinate_convention_version >= 2 else "legacy image +y",
+                        "Btheta": "increasing colatitude (southward)", "Bphi": "increasing Carrington longitude",
                         "B_los": "positive toward observer", "v_los": "positive redshift; includes rotation; observer correction excluded",
                         "ambiguity": "unresolved model azimuth branch", "velocity_frame": "Carrington for vr/vtheta/vphi"},
     }
@@ -161,9 +166,21 @@ class Snapshot(SphericalSynthesis):
             raise ValueError("Not a tensor-only SPINNME snapshot.") from error
         if not isinstance(payload, dict):
             raise ValueError("Unsupported .pme payload; expected a versioned SPINNME mapping.")
-        if payload.get("format") != "spinnme" or payload.get("format_version") != FORMAT_VERSION:
+        if payload.get("format") != "spinnme" or payload.get("format_version") not in (1, FORMAT_VERSION):
             raise ValueError(f"Unsupported .pme format/version: {payload.get('format_version')!r}")
         self.metadata = decode(json.loads(payload["metadata_json"]))
+        self.format_version = payload['format_version']
+        convention_version = self.metadata.get('conventions', {}).get('version', 1)
+        if convention_version not in (1, COORDINATE_CONVENTION_VERSION):
+            raise ValueError('Unsupported snapshot coordinate convention version.')
+        if self.format_version == 2 and ('version' not in self.metadata.get('conventions', {})
+                or self.metadata['init'].get('coordinate_convention_version') != convention_version):
+            raise ValueError('Snapshot coordinate convention metadata are missing or inconsistent.')
+        if convention_version == 1 and any(
+                item.get('type') == 'hinode' or item.get('line_id') in ('fe-i-6301', 'fe-i-6302')
+                for item in self.metadata['init']['instrument_config']):
+            warnings.warn('Legacy Hinode polarization convention retained. Retrain to correct the '
+                          'inferred physical field; saved dates and geometry are preserved.', UserWarning)
         if self.metadata.get('coordinate_order') != 'xyzt':
             raise ValueError('Snapshot coordinates must use xyzt order.')
         self._asset_directory = tempfile.TemporaryDirectory(prefix="spinnme-response-")
@@ -181,6 +198,7 @@ class Snapshot(SphericalSynthesis):
             self.metadata = _replace_assets(self.metadata, replacements)
             from .train.me_spherical_module import MESphericalModule
             init = dict(self.metadata["init"])
+            init['coordinate_convention_version'] = convention_version
             # Inference remains eager, independent of the training compiler backend.
             init["compile_config"] = {"me_solver": False}
             self.module = MESphericalModule(**init)
@@ -222,7 +240,8 @@ class Snapshot(SphericalSynthesis):
         if isinstance(observation, GenericMap):
             row = {'id': 'supplied-map', 'instrument_id': instrument_id or self.instrument_id,
                    'shape': list(observation.data.shape), 'header': dict(observation.meta),
-                   'time': {'model_time': observation.meta.get('SPINNME MODEL_TIME')}}
+                   'time': {'model_time': observation.meta.get('SPINNME MODEL_TIME'),
+                            'geometry_time': observation.meta.get('SPINNME GEOMETRY_TIME')}}
             if observation.mask is not None:
                 import base64
                 row['valid_mask_bits'] = base64.b64encode(np.packbits(~observation.mask).tobytes()).decode()
@@ -255,7 +274,8 @@ class Snapshot(SphericalSynthesis):
         originals = {key: header[key] for key in ('DATE-OBS', 'DATE-AVG', 'T_OBS', 'TIMESYS') if key in header}
         row = {"id": path.stem, "instrument_id": selected_id,
                 "shape": list(shape), "header": dict(header),
-                "time": {"model_time": header.get('SPINNME MODEL_TIME'), "original": originals},
+                "time": {"model_time": header.get('SPINNME MODEL_TIME'),
+                         "geometry_time": header.get('SPINNME GEOMETRY_TIME'), "original": originals},
                 **extra}
         if instrument_types.get(selected_id) == 'hmi':
             from .data.hmi_transmission import read_hmi_fits_acquisition
@@ -288,17 +308,24 @@ class Snapshot(SphericalSynthesis):
         header = spatial_header(row['header'])
         types = {item['instrument_id']: item['type'] for item in self.metadata['init']['instrument_config']}
         is_hmi = types.get(selected_id) == 'hmi' or 'HMI' in str(header.get('INSTRUME', '')).upper()
-        if is_hmi:
-            from .data.fits import parse_time
-            if not header.get('DATE-OBS'):
-                raise ValueError('HMI grid requires DATE-OBS, matching training coordinates.')
-            original = {key: header[key] for key in ('DATE-OBS', 'DATE-AVG', 'T_OBS', 'TIMESYS') if key in header}
-            header.remove('T_OBS', ignore_missing=True)
-            header.remove('DATE-AVG', ignore_missing=True)
-            row['time'] = {**(row.get('time') or {}),
-                           'model_time': row.get('time', {}).get('model_time') or
-                                         parse_time(header['DATE-OBS'], header.get('TIMESYS', 'utc').lower()).isoformat(),
-                           'original': row.get('time', {}).get('original', original)}
+        original = {key: header[key] for key in ('DATE-OBS', 'DATE-AVG', 'T_OBS', 'TIMESYS') if key in header}
+        timing = row.get('time') or {}
+        geometry_time = timing.get('geometry_time') or header.get('SPINNME GEOMETRY_TIME')
+        if geometry_time is not None:
+            # Explicit saved geometry wins over alternate native time cards.
+            epoch = Time(geometry_time).utc
+            header['DATE-AVG'] = getattr(epoch, str(header.get('TIMESYS', 'UTC')).lower()).isot
+            if is_hmi and header.get('T_OBS'):
+                header['T_OBS'] = epoch.tai.isot.replace('-', '.').replace('T', '_') + '_TAI'
+        if is_hmi and header.get('T_OBS'):
+            from .data.hmi_time import hmi_coordinate_header
+            header = hmi_coordinate_header(header)
+        if geometry_time is None:
+            epoch = Map(np.zeros((1, 1)), header).reference_date.utc
+        row['time'] = {**timing,
+                       'model_time': timing.get('model_time') or epoch.isot,
+                       'geometry_time': epoch.isot,
+                       'original': timing.get('original', original)}
         row['header'] = dict(header)
         if types.get(selected_id) == 'hmi' and row.get('detector_mapping') is None:
             from .loader.spherical import hmi_detector_mapping
@@ -322,7 +349,7 @@ class Snapshot(SphericalSynthesis):
         context = GridGeometry(row)
         info = row.get('time', {})
         epoch = time if time is not None else info.get('model_time') if isinstance(info, dict) else info
-        epoch = context.map.date if epoch is None else epoch
+        epoch = context.map.reference_date if epoch is None else epoch
         if indices is None:
             indices = np.arange(np.prod(row['shape']))
         indices = np.asarray(indices)
@@ -378,6 +405,7 @@ class Snapshot(SphericalSynthesis):
         Evaluation batches geometry and synthesis. Output maps retain invalid pixels as NaN.
         ``time`` changes the model epoch while retaining the selected observing geometry.
         ``shape`` and ``bounds`` use grid(); ``coordinates`` accepts physical SkyCoord samples.
+        Coordinate samples also accept a ``time`` array broadcastable to their shape.
         """
         from astropy.coordinates import SkyCoord
 
@@ -399,7 +427,7 @@ class Snapshot(SphericalSynthesis):
         time_info = row.get('time', {})
         if not isinstance(time_info, dict):
             time_info = {'model_time': time_info}
-        model_time = time if time is not None else time_info.get('model_time') or map_.date
+        model_time = time if time is not None else time_info.get('model_time') or map_.reference_date
         normalized_time = self._normalize_time(model_time)
         point_coordinates = None
         if coordinates is not None:
@@ -409,6 +437,16 @@ class Snapshot(SphericalSynthesis):
             point_coordinates = coordinates.reshape(-1)
         else:
             shape = tuple(row['shape'])
+        point_times = None
+        if np.ndim(normalized_time):
+            if point_coordinates is None:
+                raise ValueError('Array times require coordinate samples.')
+            try:
+                point_times = np.broadcast_to(normalized_time, shape).reshape(-1)
+            except ValueError as exc:
+                raise ValueError('time must broadcast to the coordinate shape.') from exc
+            if not np.isfinite(point_times).all():
+                raise ValueError('Coordinate times must be finite.')
         n = int(np.prod(shape))
         arrays, mask = {}, np.zeros(n, dtype=bool)
         sampled_coords = np.full((n, 4), np.nan) if point_coordinates is not None else None
@@ -423,7 +461,7 @@ class Snapshot(SphericalSynthesis):
             acquisition = row.get("acquisition_key")
             response_file = self.spectral_response_by_acquisition.get(instrument_id, {}).get(acquisition)
         batches = range(0, n, batch_size)
-        for start in track_progress(batches, desc='Evaluating snapshot') if progress else batches:
+        for start in track_progress(batches, desc='Sampling SPINNME') if progress else batches:
             stop = min(start + batch_size, n)
             indices = np.arange(start, stop)
             if point_coordinates is None:
@@ -431,7 +469,8 @@ class Snapshot(SphericalSynthesis):
                                    seconds_per_dt=self.seconds_per_dt, scan_times=time is None)
             else:
                 g = context.points(point_coordinates[start:stop], Rs_per_ds=self.Rs_per_ds,
-                                   normalized_time=normalized_time)
+                                   normalized_time=normalized_time if point_times is None else point_times[start:stop],
+                                   include_pixels=synthesis_needed)
                 sampled_coords[start:stop] = g['coords']
             valid = np.isfinite(g["coords"]).all(-1) & (g["mu"].reshape(-1) > mu_limit)
             if native_valid is not None:
@@ -470,6 +509,7 @@ class Snapshot(SphericalSynthesis):
                 synthesized = self.synthesize_observation(
                     g["coords"][valid], g["cartesian_to_spherical_transform"][valid], g["rtp_to_img_transform"][valid],
                     g["v_obs_los"][valid], instrument_id=instrument_id, wavelength_grid=grid,
+                    image_p_angle=g['image_p_angle'][valid],
                     spectral_response_file=response_file, detector_coords=detector, pix=g["pix"][valid],
                     batch_size=batch_size, progress=progress)
                 # Intrinsic parameters keep one meaning regardless of whether spectra
@@ -495,15 +535,24 @@ class Snapshot(SphericalSynthesis):
         if not arrays:
             raise ValueError("Selected grid contains no visible finite solar surface pixels.")
         arrays = {name: values.reshape((*shape, *values.shape[1:])) for name, values in arrays.items()}
-        metadata = {"snapshot": self.path.name, "snapshot_version": FORMAT_VERSION, "spinnme_version": __version__,
-                    "observation_id": row["id"], "instrument_id": instrument_id, "model_time": Time(model_time).utc.isot,
-                    "geometry_time": map_.date.utc.isot, "wavelength_grid_m": np.asarray(grid).tolist(),
+        metadata = {"snapshot": self.path.name, "snapshot_path": str(self.path.resolve()),
+                    "source_paths": row.get("source_paths", []), "observation_role": row.get("role"),
+                    "dataset_type": row.get("dataset_type"), "snapshot_version": self.format_version, "spinnme_version": __version__,
+                    "observation_id": row["id"], "instrument_id": instrument_id,
+                    "model_time": Time(model_time).utc.isot.tolist() if point_times is not None else Time(model_time).utc.isot,
+                    "geometry_time": map_.reference_date.utc.isot, "wavelength_grid_m": np.asarray(grid).tolist(),
                     "observer_velocity": np.asarray(velocity, dtype=float).tolist(),
                     "observer_velocity_correction_applied": bool(np.any(velocity)),
                     "wavelength_center_m": self.wavelength_config[instrument_id]["wavelength_center"].to_value(u.m),
                     "conventions": self.metadata["conventions"], "config_hash": self.metadata["config_hash"],
                     "line_id": row.get('line_id'), "original_times": time_info.get('original', {}),
                     "raster_time_offsets_applied": point_coordinates is None and time is None and row.get('time_offsets_seconds') is not None}
+        if point_coordinates is None and row.get('slit_pixel_world') is not None:
+            metadata['slit_pixel_world'] = row['slit_pixel_world']
+            for key in ('slit_geometry', 'slit_coordinate_headers'):
+                if key in row:
+                    metadata[key] = row[key]
+            metadata['spatial_wcs_approximation'] = 'nominal display WCS; native slit coordinates in provenance'
         if metadata['raster_time_offsets_applied']:
             metadata['time_offsets_seconds'] = row['time_offsets_seconds']
             metadata['time_offset_axis'] = row['time_offset_axis']

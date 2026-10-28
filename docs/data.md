@@ -9,7 +9,7 @@ Choose the guide that matches your inputs:
 | Solar Orbiter PHI calibrated L2 full-Stokes HRT/FDT cube with verified release metadata | [PHI](phi.md) |
 | Another calibrated Stokes cube | [Custom FITS and instruments](custom.md) |
 
-Magnetic/velocity pipeline maps are comparison references, rather than Stokes training inputs. HMI requires its separate response preparation. Hinode presets default to monochromatic sampling. PHI presets integrate a nominal single-order Airy response; see [PHI response assumptions](phi.md#set-wavelengths-continuum-and-time).
+Magnetic/velocity pipeline maps are comparison references, rather than Stokes training inputs. HMI requires its separate response preparation. Hinode presets use a 24.8 mÅ FWHM Gaussian spectral response. PHI presets integrate a nominal single-order Airy response; see [PHI response assumptions](phi.md#set-wavelengths-continuum-and-time).
 
 ## What the data must contain
 
@@ -43,11 +43,17 @@ spinnme run --config generic/stokes_cube --input './data/custom/*.fits' --run_pa
 Keep quoted globs so SPINNME receives the complete input selection. Relative paths are resolved from the directory where you run the commands. `--input` replaces the first training dataset and the validation input; additional datasets are configured in YAML.
 
 An existing cache is trusted and reused without scanning source files or checking stored chunks, shapes or preparation settings. Reruns in the same Python process reuse an already loaded datamodule while it remains in memory. Use `--reload` or a fresh work directory after changing inputs or preparation settings, or to replace a damaged cache. Older caches are loaded directly without their recorded file checks.
-In distributed runs, only rank 0 prepares or rebuilds the cache. Other ranks restore prepared data, waiting up to an hour if no cache is available.
+New caches store each full-spectrum observation once. Training lines and validation select wavelengths, masks and normalization from that shared store. Zarr chunks target 1 MiB to bound decompression for small training batches. Native pixel IDs, slit coordinates and acquisition times are retained. Validation reads storage sequentially and restores native image order for maps.
+
+Loader settings (`batch_size`, `dataset_batch_size`, `num_workers`, `prefetch_factor`, `persistent_workers`, `pin_memory`, `balance_train_configs`) apply from the current config on every reload. Changing them requires no preparation. Scientific selections and normalization still require `--reload`.
+
+Preparation writes the arrays and reload metadata directly. Cached data are trusted; no integrity inventory, checksum pass or verification scan is performed.
+
+In distributed runs, only rank 0 prepares or rebuilds the cache. Other ranks reopen the published metadata and lazy arrays concurrently, without acquiring the preparation writer lock. Zarr stores open when a worker reads a batch. Lightning’s `LOCAL_RANK` is honored even when Slurm rank variables are inherited from the parent. Followers skip logger initialization and hardware/input inventories. Large profile selectors are read-only memory maps, including in spawned loader workers. For compatible physical conventions, on the first reuse of an older selector layout, rank 0 moves selectors out of JSON before launching followers; this preserves the existing spectra and does not read FITS or rebuild observations. Other ranks wait up to an hour only if no cache has been published.
 
 ## Times and valid pixels
 
-By default, the model uses `DATE-OBS`; the time origin is the earliest selected observation. Prepared Hinode rasters retain their slit acquisition times. `time_reference: average`, `solar` or `earth` selects `DATE-AVG`, `DATE_SUN` or `DATE_EAR` for the model time while keeping the native spatial geometry.
+HMI uses the effective `T_OBS` epoch (TAI in JSOC) for both the model and coordinate geometry. `DATE-OBS` remains the UTC exposure start, and `T_REC` is only an archive slot label. `T_OBS` is required. Other datasets default to `DATE-OBS`; the time origin is the earliest selected observation. Hinode slit folders are assembled during inversion and retain their slit acquisition times. `time_reference: average`, `solar` or `earth` selects `DATE-AVG`, `DATE_SUN` or `DATE_EAR` for the model time while keeping the native spatial geometry.
 
 For a generic/Hinode `time_hdu`, offsets are seconds relative to the **selected model time**, not an independently read DATEREF. Helper-generated Hinode offsets use `DATE-OBS`, so retain `time_reference: observation` or rebase the offset map when changing that reference.
 
@@ -57,4 +63,4 @@ A spatial WCS that depends on external distortion/lookup HDUs (`-TAB`, CPDIS or 
 
 ## Download data
 
-Install archive support with `pip install 'spinnme[download]'`. The mission guides give download commands and preparation steps. HMI requires a registered JSOC email; PHI uses the Solar Orbiter Archive. For a known Hinode file, use `spinnme download hinode --url URL --output DIRECTORY`.
+Install archive support with `pip install 'spinnme[download]'`. The mission guides give download commands and preparation steps. HMI requires a registered JSOC email; PHI uses the Solar Orbiter Archive. For a known Hinode file, use `spinnme download hinode --url URL --output DIRECTORY`. For calibrated Stokes rasters, use `spinnme download hinode --start START --end END --output DIRECTORY`; see the [Hinode guide](hinode.md).

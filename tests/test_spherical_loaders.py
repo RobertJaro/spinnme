@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 import torch
 from astropy.io import fits
+from astropy.time import Time
 
 from spinnme.data.hmi_time import load_hmi_date_obs_map
 from spinnme.data.hmi_transmission import (
@@ -97,6 +98,7 @@ def test_hmi_training_time_comes_from_fits_header(tmp_path):
     fits.PrimaryHDU(
         header=fits.Header({
             'T_REC': '2024.05.07_12:00:00.000_TAI',
+            'T_OBS': '2024.05.07_12:00:00.000_TAI',
             'DATE-OBS': '2024-05-07T11:58:09.400',
             'HCAMID': 3,
         })
@@ -106,18 +108,18 @@ def test_hmi_training_time_comes_from_fits_header(tmp_path):
         np.asarray([[segment_path]], dtype=object), 'hmi'
     )
 
-    assert observation_time == datetime(2024, 5, 7, 11, 58, 9, 400000)
+    assert observation_time == datetime(2024, 5, 7, 11, 59, 23)
 
-def test_hmi_latent_time_requires_date_obs(tmp_path):
+def test_hmi_latent_time_requires_t_obs(tmp_path):
     segment_path = tmp_path / 'sample.I0.fits'
     fits.PrimaryHDU(
         header=fits.Header({'T_REC': '2024.05.07_12:00:00.000_TAI', 'HCAMID': 3})
     ).writeto(segment_path)
 
-    with pytest.raises(ValueError, match='DATE-OBS'):
+    with pytest.raises(ValueError, match='T_OBS'):
         SphericalDataModule._hmi_date_obs(segment_path)
 
-def test_hmi_map_coordinate_frame_uses_date_obs(tmp_path):
+def test_hmi_map_coordinate_frame_uses_t_obs(tmp_path):
     segment_path = tmp_path / 'sample.I0.fits'
     header = fits.Header({
         'TELESCOP': 'SDO/HMI',
@@ -145,11 +147,11 @@ def test_hmi_map_coordinate_frame_uses_date_obs(tmp_path):
     hmi_map = load_hmi_date_obs_map(segment_path)
 
     assert hmi_map.date.isot == '2024-05-07T11:58:09.400'
-    assert hmi_map.reference_date.isot == '2024-05-07T11:58:09.400'
-    assert hmi_map.coordinate_frame.obstime.isot == '2024-05-07T11:58:09.400'
-    assert hmi_map.observer_coordinate.obstime.isot == '2024-05-07T11:58:09.400'
-    assert 'T_OBS' not in hmi_map.meta
-    assert 'DATE-AVG' not in hmi_map.meta
+    assert hmi_map.reference_date.utc.isot == '2024-05-07T11:59:23.000'
+    assert hmi_map.coordinate_frame.obstime.utc.isot == '2024-05-07T11:59:23.000'
+    assert hmi_map.observer_coordinate.obstime.utc.isot == '2024-05-07T11:59:23.000'
+    assert hmi_map.meta['T_OBS'] == header['T_OBS']
+    assert hmi_map.meta['DATE-AVG'] == '2024-05-07T11:59:23.000'
 
 def _write_hmi_wcs_segment(path, *, crpix1=1.5, date_obs='2024-05-07T11:58:09.400'):
     header = fits.Header({
@@ -166,6 +168,7 @@ def _write_hmi_wcs_segment(path, *, crpix1=1.5, date_obs='2024-05-07T11:58:09.40
         'CDELT1': 0.5,
         'CDELT2': 0.5,
         'DATE-OBS': date_obs,
+        'T_OBS': Time(date_obs).tai.isot + '_TAI',
         'DSUN_OBS': 1.5e11,
         'RSUN_REF': 6.957e8,
         'HGLN_OBS': 0.0,
@@ -189,7 +192,7 @@ def test_hmi_segment_alignment_rejects_date_obs_mismatch(tmp_path):
     _write_hmi_wcs_segment(reference_path)
     _write_hmi_wcs_segment(segment_path, date_obs='2024-05-07T11:58:10.400')
 
-    with pytest.raises(ValueError, match=r'Misaligned HMI segments.*DATE-OBS'):
+    with pytest.raises(ValueError, match=r'Misaligned HMI segments.*T_OBS'):
         HMISphericalDataset._validate_segment_alignment([reference_path, segment_path])
 
 def test_training_time_range_rejects_empty_selection(monkeypatch):
@@ -233,6 +236,9 @@ def test_validation_loader_uses_training_worker_count(num_workers):
     data_module = SphericalDataModule.__new__(SphericalDataModule)
     data_module.num_workers = num_workers
     data_module.num_dataset_workers = 16
+    data_module.prefetch_factor = 2
+    data_module.persistent_workers = True
+    data_module.pin_memory = False
     data_module.batch_size = 4096
     data_module.valid_dataset = Dataset()
     assert data_module.val_dataloader().num_workers == num_workers
@@ -453,14 +459,16 @@ def test_hmi_alignment_checks_only_headers(tmp_path, monkeypatch, compressed):
     paths = []
     for index in range(2):
         path = tmp_path/f'plane{index}.fits'
+        meta = header()
+        meta['T_OBS'] = Time(meta['DATE-OBS']).tai.isot + '_TAI'
         if compressed:
-            fits.HDUList([fits.PrimaryHDU(), fits.CompImageHDU(np.ones((3, 5)), header())]).writeto(path)
+            fits.HDUList([fits.PrimaryHDU(), fits.CompImageHDU(np.ones((3, 5)), meta)]).writeto(path)
         else:
-            fits.writeto(path, np.ones((3, 5)), header())
+            fits.writeto(path, np.ones((3, 5)), meta)
         paths.append(path)
     def unexpected(*args, **kwargs):
         raise AssertionError('Alignment must not load Stokes pixels')
-    monkeypatch.setattr(spherical, 'load_hmi_date_obs_map', unexpected)
+    monkeypatch.setattr(spherical, 'load_hmi_map', unexpected)
     monkeypatch.setattr(fits.hdu.image._ImageBaseHDU, '_get_scaled_image_data', unexpected)
     HMISphericalDataset._validate_segment_alignment(paths)
 

@@ -39,7 +39,7 @@ class SphericalSynthesis:
                                continuum_weights=None, detector_coords=None,
                                spectral_response_file=None, pix=None,
                                batch_size=2 ** 13, progress=True,
-                               denormalize_stokes=False):
+                               denormalize_stokes=False, image_p_angle=None):
         """Evaluate a spherical inversion and synthesize observer-frame Stokes profiles.
 
         Geometry and velocities follow the identical transformation used during
@@ -68,6 +68,13 @@ class SphericalSynthesis:
             raise ValueError(f'coords must end in [x, y, z, t], got {tuple(coords.shape)}.')
         output_shape = tuple(coords.shape[:-1])
         n_points = int(np.prod(output_shape))
+        if image_p_angle is not None:
+            image_p_angle = torch.as_tensor(image_p_angle, dtype=torch.float32)
+            if image_p_angle.ndim == 0:
+                image_p_angle = image_p_angle.expand(n_points, 1)
+            image_p_angle = self._flat_tensor(image_p_angle, (1,), 'image_p_angle')
+            if image_p_angle.shape[0] != n_points:
+                raise ValueError('image_p_angle must have one value per sample.')
         coords = coords.reshape(-1, 4)
         c2s = self._flat_tensor(cartesian_to_spherical_transform, (3, 3),
                                 'cartesian_to_spherical_transform')
@@ -130,6 +137,8 @@ class SphericalSynthesis:
         finite = (torch.isfinite(coords).all(-1) & torch.isfinite(c2s).all((-2, -1)) &
                   torch.isfinite(rtp2img).all((-2, -1)) & torch.isfinite(v_obs).all(-1) &
                   torch.isfinite(mu).all(-1) & torch.isfinite(wavelength_grid).all(-1))
+        if image_p_angle is not None:
+            finite &= torch.isfinite(image_p_angle).all(-1)
         if detector_coords is not None:
             finite &= torch.isfinite(detector_coords).all(-1)
         if pix is not None:
@@ -163,6 +172,8 @@ class SphericalSynthesis:
                     raw, transformed, v_obs[index].to(self.device), self.gauss_per_dB,
                     self.meters_per_ds, self.seconds_per_dt,
                 )
+                if image_p_angle is not None:
+                    forward_params['image_p_angle'] = image_p_angle[index].to(self.device)
                 if instrument_id in self.velocity_correction_models:
                     forward_params['vdop'] = forward_params['vdop'] + self.velocity_correction_models[
                         instrument_id](batch_coords[..., 3:4])

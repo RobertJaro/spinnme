@@ -32,6 +32,9 @@ data:
   batch_size: 4096
   dataset_batch_size: 512
   num_workers: 4
+  prefetch_factor: 2
+  persistent_workers: true
+  pin_memory: false
   num_dataset_workers: 8
 training:
   accumulate_grad_batches: 1
@@ -39,7 +42,7 @@ training:
 
 `batch_size` requests profiles per training batch on each device; `dataset_batch_size` is the chunk drawn from one acquisition. Require a positive multiple of the chunk size, or of `dataset_batch_size × number of training entries` when balancing entries. Short final batches are retained.
 
-Reduce batch size for less device memory use. `accumulate_grad_batches: 4` combines four batches per optimizer update; keep this fixed in step-budget comparisons. More `num_workers` can improve training throughput. `num_dataset_workers` defaults to 8 and prepares up to 8 acquisitions concurrently: reading Stokes data, computing geometry, normalizing/filtering and writing caches. `num_workers` separately controls training/validation DataLoader workers. Preparation concurrency is capped by the number of acquisitions; reduce it when RAM is limited. Workers use `spawn` to avoid inheriting background-thread locks from W&B, Torch or Zarr. Set both counts to `0` when debugging. When calling `run()` from a Python script with workers enabled, put the call inside `if __name__ == "__main__":`; use zero workers for an interactive Python session.
+Reduce batch size for less device memory use. `accumulate_grad_batches: 4` combines four batches per optimizer update; keep this fixed in step-budget comparisons. More `num_workers` can improve training throughput. `num_dataset_workers` defaults to 8 and prepares up to 8 acquisitions concurrently: reading Stokes data, computing geometry, normalizing/filtering and writing caches. `num_workers` separately controls training/validation DataLoader workers; runnable configurations and notebooks use at least 4. Batch sizes, worker count, prefetching, persistent workers, memory pinning and balancing apply to cached data without rebuilding. `prefetch_factor` is the number of batches queued per worker; it must be positive. Preparation concurrency is capped by the number of acquisitions; reduce it when RAM is limited. Workers use `spawn` to avoid inheriting background-thread locks from W&B, Torch or Zarr. Set both counts to `0` when debugging. When calling `run()` from a Python script with workers enabled, put the call inside `if __name__ == "__main__":`. Notebook examples use package-defined datasets with 4 loader workers.
 
 By default, Lightning detects an available GPU accelerator and uses its available devices; CPU is the fallback. YAML `training.devices` can restrict that selection. `--device cpu` optionally forces one CPU device. For a specific multi-GPU selection, set `training.accelerator: gpu` and `training.devices: [0, 1]`.
 
@@ -70,10 +73,14 @@ model:
   encoding_config:
     type: fourier
     num_frequencies: [8, 8, 8, 4]
-    max_frequencies: [64, 64, 64, 4]
+    max_frequencies: [4096, 4096, 4096, 4]
 ```
 
 Fourier lists follow `[x, y, z, time]` in normalized coordinates. Assess higher frequencies against spatial resolution, cadence and noise. Other MLP encodings are `identity`, `gaussian` and `positional_isotropic`.
+
+The default spatial maximum is `2^12 = 4096`. For `positional_isotropic`, use
+`max_frequencies: [12, 4]` for that spatial maximum and a temporal exponent of 4;
+its bounds are exponents rather than direct frequency factors.
 
 Coordinates are Carrington-frame x/y/z on the solar sphere, in solar radii divided by `data.Rs_per_ds`; time is seconds from `data.ref_time` divided by `data.seconds_per_dt`. With `Rs_per_ds: 1` and `seconds_per_dt: 3600`, one spatial unit is a solar radius and one time unit is an hour. These internal coordinates support spherical inversion; they do not select a Cartesian inversion mode. Changing these scales also changes the physical meaning of encoding settings.
 
@@ -126,7 +133,7 @@ For absolute-intensity fits, set `continuum_normalization: false`. If your YAML 
 
 ## Choose a validation observation or holdout
 
-`data.valid_config.sample_idx` selects one acquisition, starting at zero; omitting it selects the middle observation. For a holdout from a shared input inventory with at least six acquisitions and no other subsampling:
+`data.valid_config` accepts one dataset mapping or a list of mappings. Each entry’s `sample_idx` selects one acquisition, starting at zero; omitting it selects the middle observation. Multiple entries share one loader worker pool and appear together in the Stokes profile comparison, with separate wavelength axes. The first entry retains the `valid.*` metric names; additional entries use `valid.<instrument_id>.*`. For a holdout from a shared input inventory with at least six acquisitions and no other subsampling:
 
 Set `exclude_samples: [5]` in each matching training dataset and `sample_idx: 5` in `data.valid_config` in your run YAML.
 

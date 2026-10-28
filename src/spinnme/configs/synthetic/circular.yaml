@@ -16,7 +16,7 @@ data:
       instrument_id: CIRCULAR
       line_id: fe-i-6173
       time_reference: observation
-  num_workers: 0
+  num_workers: 4
   num_dataset_workers: 0
   batch_size: 128
   dataset_batch_size: 64
@@ -51,8 +51,6 @@ model:
   vector_potential: false
   activation: swish
   encoding_config: {type: identity}
-  b_sinh_scale: 10
-  v_sinh_scale: 1
 
 training:
   plot_validation: true

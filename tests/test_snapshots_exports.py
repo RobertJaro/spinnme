@@ -352,6 +352,56 @@ def test_public_grid_map_and_coordinate_interfaces_agree(saved_snapshot, tmp_pat
         assert single.mask.shape == () and single.arrays['B'].shape == ()
 
 
+def test_coordinate_scan_times_across_batches(saved_snapshot, tmp_path, monkeypatch):
+    from astropy.time import Time
+    from sunpy.map import Map
+    import spinnme.progress
+
+    bars = []
+    def progress(batches, **kwargs):
+        bars.append(list(batches))
+        return batches
+    monkeypatch.setattr(spinnme.progress, 'progress', progress)
+    with spinnme.load(saved_snapshot[0], device='cpu') as snapshot:
+        grid = Map(np.zeros((7, 9)), saved_snapshot[2])
+        y, x = np.indices((3, 5))
+        coordinates = grid.pixel_to_world((x+2)*u.pix, (y+2)*u.pix)
+        times = Time('2024-03-23T01:00:00') + np.array([.123, 20.456, 67.891, 92.345, 130.678])*u.s
+        combined = snapshot.sample(coordinates, time=times, parameters=['B_los'], batch_size=4, progress=True)
+        assert bars == [[0, 4, 8, 12]]
+        xyzt = np.asarray(combined.metadata['coordinates']['values']).reshape(3, 5, 4)
+        np.testing.assert_allclose(xyzt[..., -1], np.broadcast_to(snapshot._normalize_time(times), (3, 5)))
+        for column in range(5):
+            slit = snapshot.sample(coordinates[:, column], time=times[column], parameters=['B_los'])
+            np.testing.assert_allclose(combined.arrays['B_los'][:, column], slit.arrays['B_los'], atol=.001)
+            np.testing.assert_array_equal(combined.mask[:, column], slit.mask)
+        restored = read_npz(combined.write_npz(tmp_path/'scan.npz')[0])
+        assert restored.metadata['model_time'] == times.utc.isot.tolist()
+        with pytest.raises(ValueError, match='broadcast'):
+            snapshot.sample(coordinates, time=times[:2], parameters=['B_los'])
+        with pytest.raises(ValueError, match='Array times require'):
+            snapshot.evaluate(time=times, parameters=['B_los'])
+
+
+def test_coordinate_scan_times_with_default_batch_size(saved_snapshot):
+    from astropy.time import Time
+    from sunpy.map import Map
+
+    with spinnme.load(saved_snapshot[0], device='cpu') as snapshot:
+        grid = Map(np.zeros((7, 9)), saved_snapshot[2])
+        indices = np.arange(8193)
+        coordinates = grid.pixel_to_world((2+indices % 5)*u.pix, (2+indices % 3)*u.pix)
+        times = Time('2024-03-23T01:00:00') + (indices*.125)*u.s
+        combined = snapshot.sample(coordinates, time=times, parameters=['B_los'])
+        assert combined.mask.all()
+        assert combined.arrays['B_los'].shape == (8193,)
+        xyzt = np.asarray(combined.metadata['coordinates']['values'])
+        np.testing.assert_allclose(xyzt[:, -1], snapshot._normalize_time(times))
+        for index in (0, 8191, 8192):
+            point = snapshot.sample(coordinates[index], time=times[index], parameters=['B_los'])
+            np.testing.assert_allclose(combined.arrays['B_los'][index], point.arrays['B_los'], atol=.001)
+
+
 def test_crop_preserves_native_scan_support_and_calibration(saved_snapshot):
     import base64
 
@@ -450,3 +500,149 @@ def test_multinstrument_state_and_explicit_instrument_selection(saved_snapshot, 
         result = snapshot.evaluate('example', instrument_id='OTHER', parameters=['Brtp', 'IQUV'])
         assert result.metadata['instrument_id'] == 'OTHER'
         assert result.arrays['I'].shape == (7, 9, 5)
+
+
+@pytest.mark.parametrize('explicit_distance', [False, True])
+def test_scanned_point_geometry_matches_sunpy(saved_snapshot, explicit_distance, monkeypatch):
+    from astropy.time import Time
+    from sunpy.coordinates import frames
+    from spinnme.grids import GridGeometry
+    from spinnme.data.util import (cartesian_to_spherical_matrix, image_to_spherical_matrix,
+                                   observer_ray_and_mu, spherical_to_cartesian)
+
+    times = Time('2024-03-23T01:00:00') + np.array([0., 0., 37.123, 37.123, 37.123, 100., 100.])*u.s
+    # Include distinct observers at the same epoch, repeated slits and an
+    # off-disk ray. Explicit 3-D points also exercise non-surface radii.
+    observer = SkyCoord(np.array([0., 0., .01, .01, .02, .03, .03])*u.deg,
+                        np.full(7, 6.)*u.deg, np.full(7, 1.49e11)*u.m,
+                        frame=frames.HeliographicStonyhurst(obstime=times))
+    kwargs = {'distance': np.linspace(1.48e11, 1.485e11, 7)*u.m} if explicit_distance else {}
+    coordinates = SkyCoord(np.array([-200., -50., 0., 50., 300., 1200., -300.])*u.arcsec,
+                           np.linspace(-200, 200, 7)*u.arcsec,
+                           frame=frames.Helioprojective(observer=observer, obstime=times), **kwargs)
+    physical = SkyCoord(coordinates.make_3d())
+    central = observer.transform_to(frames.HeliographicCarrington(observer=observer, obstime=times))
+    carrington = physical.transform_to(frames.HeliographicCarrington(observer=observer, obstime=times))
+    lon, lat = carrington.lon.to_value(u.rad), carrington.lat.to_value(u.rad)
+    radius = carrington.radius.to_value(u.Rsun)
+    spherical = np.stack([radius, np.pi/2-lat, lon], axis=-1)
+    with spinnme.load(saved_snapshot[0], device='cpu') as snapshot:
+        context = GridGeometry(snapshot.grid())
+        normalized_time = snapshot._normalize_time(times)
+        actual = context.points(coordinates, Rs_per_ds=1., normalized_time=normalized_time, include_pixels=False)
+        expected_xyz = spherical_to_cartesian(spherical)
+        np.testing.assert_allclose(actual['coords'][:, :3], expected_xyz, atol=2e-12)
+        np.testing.assert_array_equal(actual['coords'][:, 3], normalized_time)
+        np.testing.assert_allclose(actual['cartesian_to_spherical_transform'],
+                                   cartesian_to_spherical_matrix(spherical), atol=2e-12)
+        distance = (observer.radius/context.map.rsun_meters).to_value(u.one)
+        expected_matrix = image_to_spherical_matrix(lon, lat, central.lon.to_value(u.rad),
+                                                    central.lat.to_value(u.rad), context.angle,
+                                                    observer_distance=distance, radius=radius)
+        np.testing.assert_allclose(actual['rtp_to_img_transform'], np.swapaxes(expected_matrix, -1, -2), atol=2e-12)
+        _, expected_mu = observer_ray_and_mu(lon, lat, central.lon.to_value(u.rad),
+                                            central.lat.to_value(u.rad), distance, radius=radius)
+        np.testing.assert_allclose(actual['mu'][:, 0], expected_mu, atol=2e-12)
+        assert 'pix' not in actual and 'detector_coords' not in actual
+
+        maps_only = snapshot.sample(physical, time=times, parameters=['B_los'])
+        with_spectra = snapshot.sample(physical, time=times, parameters=['B_los', 'I'])
+        np.testing.assert_array_equal(maps_only.mask, with_spectra.mask)
+        np.testing.assert_allclose(maps_only.arrays['B_los'], with_spectra.arrays['B_los'], atol=1e-4)
+
+        transform = SkyCoord.transform_to
+        transformed_observers = []
+        def track(self, frame, *args, **kwargs):
+            if isinstance(self.frame, frames.Helioprojective):
+                pytest.fail('Magnetic scan sampling must not reproject every point with SunPy.')
+            if isinstance(getattr(frame, 'frame', frame), frames.HeliographicCarrington):
+                transformed_observers.append(self.size)
+            return transform(self, frame, *args, **kwargs)
+        monkeypatch.setattr(SkyCoord, 'transform_to', track)
+        sampled = snapshot.sample(physical, time=times, parameters=['B', 'B_los', 'azimuth'])
+        assert sampled.mask.sum() == (7 if explicit_distance else 6)
+        assert [size for size in transformed_observers if size > 1] == [4]
+
+
+def test_legacy_snapshot_retains_original_predictions(saved_snapshot, tmp_path):
+    path, _, _ = saved_snapshot
+    with spinnme.load(path, device='cpu') as current:
+        expected = current.evaluate(parameters=['I', 'Q', 'U', 'V', 'azimuth'])
+    payload = torch.load(path, weights_only=True)
+    payload['format_version'] = 1
+    metadata = json.loads(payload['metadata_json'])
+    metadata['conventions'].pop('version')
+    metadata['init'].pop('coordinate_convention_version')
+    payload['metadata_json'] = json.dumps(metadata)
+    legacy = tmp_path/'legacy.pme'
+    torch.save(payload, legacy)
+    with spinnme.load(legacy, device='cpu') as model:
+        assert model.module.coordinate_convention_version == 1
+        actual = model.evaluate(parameters=list(expected.arrays))
+    for key in expected.arrays:
+        np.testing.assert_array_equal(actual.arrays[key], expected.arrays[key])
+
+
+def test_checkpoint_rejects_legacy_coordinate_conventions(saved_snapshot):
+    _, module, _ = saved_snapshot
+    checkpoint = {'state_dict': module.state_dict()}
+    module.on_save_checkpoint(checkpoint)
+    assert checkpoint['spinnme_coordinate_convention_version'] == 2
+    module.on_load_checkpoint(checkpoint)
+    checkpoint.pop('spinnme_coordinate_convention_version')
+    with pytest.raises(ValueError, match='coordinate conventions'):
+        module.on_load_checkpoint(checkpoint)
+
+
+def test_snapshot_rejects_mismatched_coordinate_metadata(saved_snapshot, tmp_path):
+    payload = torch.load(saved_snapshot[0], weights_only=True)
+    metadata = json.loads(payload['metadata_json'])
+    metadata['init']['coordinate_convention_version'] = 1
+    payload['metadata_json'] = json.dumps(metadata)
+    path = tmp_path/'inconsistent.pme'
+    torch.save(payload, path)
+    with pytest.raises(ValueError, match='convention metadata'):
+        spinnme.load(path, device='cpu')
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+@pytest.mark.parametrize('date_source', ['t_obs', 'date_obs', 'explicit'])
+def test_hmi_snapshot_uses_actual_dates_independent_of_version(saved_snapshot, tmp_path, legacy, date_source):
+    import warnings
+    from astropy.time import Time
+    from sunpy.map import Map
+    path, _, header = saved_snapshot
+    if legacy:
+        payload = torch.load(path, weights_only=True)
+        payload['format_version'] = 1
+        metadata = json.loads(payload['metadata_json'])
+        metadata['conventions'].pop('version')
+        metadata['init'].pop('coordinate_convention_version')
+        payload['metadata_json'] = json.dumps(metadata)
+        path = tmp_path/'old-time.pme'
+        torch.save(payload, path)
+    with warnings.catch_warnings(record=True) as caught, spinnme.load(path, device='cpu') as snapshot:
+        warnings.simplefilter('always')
+        header.update(INSTRUME='HMI_SIDE1', TELESCOP='SDO/HMI')
+        if date_source != 'date_obs':
+            header['T_OBS'] = '2024.03.23_01:01:22.043_TAI'
+        timing = {'model_time': '2024-03-23T01:02:00'}
+        if date_source == 'explicit':
+            timing['geometry_time'] = '2024-03-23T00:59:30'
+        row = snapshot.grid({'id': 'hmi', 'instrument_id': 'USER', 'shape': [7, 9],
+                             'header': dict(header), 'time': timing})
+        expected = Time({'date_obs': '2024-03-23T01:00:00', 't_obs': '2024-03-23T01:00:45.043',
+                         'explicit': '2024-03-23T00:59:30'}[date_source])
+        coordinate_epoch = Map(np.zeros((7, 9)), row['header']).reference_date
+        assert abs((coordinate_epoch-expected).to_value(u.s)) < 1e-6
+        assert abs((Time(row['time']['geometry_time'])-expected).to_value(u.s)) < 1e-6
+        assert row['time']['model_time'] == timing['model_time']
+        assert row['header']['DATE-OBS'] == header['DATE-OBS']
+        result = snapshot.evaluate(row, parameters=['B'], time='2024-03-23T01:03:00')
+        assert Time(result.metadata['model_time']) == Time('2024-03-23T01:03:00')
+        assert abs((Time(result.metadata['geometry_time'])-expected).to_value(u.s)) < 1e-6
+        file = result.write_fits(tmp_path/'dated-export')[0]
+        restored = snapshot.grid(file)
+        assert restored['time']['model_time'] == result.metadata['model_time']
+        assert restored['time']['geometry_time'] == result.metadata['geometry_time']
+    assert not any('legacy' in str(w.message).lower() for w in caught)

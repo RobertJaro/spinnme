@@ -15,6 +15,7 @@ try:
 except ImportError:
     wandb = None
 from astropy import units as u
+from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.nddata import block_reduce
 from astropy.wcs import WCS
@@ -32,7 +33,7 @@ from spinnme.data.fits import (
     parse_time,
     read_fits_observation,
 )
-from spinnme.data.hmi_time import load_hmi_date_obs_map
+from spinnme.data.hmi_time import load_hmi_map, hmi_observation_time, hmi_time_metadata
 from spinnme.data.hmi_transmission import (
     load_hmi_transmission_profile,
     read_hmi_fits_acquisition,
@@ -50,7 +51,7 @@ from spinnme.instrument import hmi_wavelength_config
 from spinnme.loader.polarization import polarization_selection
 from spinnme.loader.util import MultiprocessingWrapper
 from spinnme.progress import progress
-from spinnme.train.data_loader import CombinedDataset, TensorsDataset, TimeStratifiedBatchSampler
+from spinnme.train.data_loader import ObservationView, CombinedDataset, TensorsDataset, TimeStratifiedBatchSampler
 
 
 def _summarize_physics_coordinates(spherical_coords):
@@ -89,14 +90,17 @@ class SphericalDataModule(LightningDataModule):
                  stokes_normalization=1.0, ref_time=None,
                  batch_size=65536, dataset_batch_size=4096,
                  num_workers=4, num_dataset_workers=8, balance_train_configs=False,
-                 preparation_seed=None):
+                 preparation_seed=None, prefetch_factor=2, persistent_workers=True, pin_memory=False):
         super().__init__()
         self.spectral_response_files = {}
         self.spectral_response_by_acquisition = {}
         self.batch_size, self.dataset_batch_size = batch_size, dataset_batch_size
         self.balance_train_configs = balance_train_configs
         self.preparation_seed = preparation_seed
-        self.num_workers = num_workers if num_workers is not None else 0
+        self.prefetch_factor = prefetch_factor
+        self.persistent_workers = persistent_workers
+        self.pin_memory = pin_memory
+        self.num_workers = num_workers if num_workers is not None else 4
         self.num_dataset_workers = 8 if num_dataset_workers is None else num_dataset_workers
         if min(self.num_workers, self.num_dataset_workers) < 0:
             raise ValueError('Worker counts must be nonnegative.')
@@ -107,12 +111,12 @@ class SphericalDataModule(LightningDataModule):
         self.Rs_per_ds, self.gauss_per_dB = Rs_per_ds, gauss_per_dB
         self.train_config_indices, self.train_datasets = [], []
         common = {'seconds_per_dt': seconds_per_dt, 'Rs_per_ds': Rs_per_ds,
-                      'ref_time': ref_time, 'work_directory': work_directory}
+                      'ref_time': ref_time, 'work_directory': work_directory, 'observation_seed': preparation_seed or 0}
         for group, source_config in enumerate(configs):
             config = copy.deepcopy(source_config)
             ds_type = config.pop('type').lower()
             dataset_class = self._dataset_class(ds_type)
-            files = self._load_IQUV_files(config.pop('data_path')) if ds_type in ('hmi', 'test') else self._load_all_files(config.pop('data_path'))
+            files = self._load_files(config.pop('data_path'), ds_type)
             files = self._select_files(files, config, ds_type)
             if not files.__len__():
                 raise ValueError(f'No training files remain for dataset {group}.')
@@ -153,35 +157,40 @@ class SphericalDataModule(LightningDataModule):
                                  'different counts across instrument IDs are supported.')
             if not np.isclose(center, dataset.wavelength_config['wavelength_center'].to_value(u.m), rtol=1e-12, atol=0):
                 raise ValueError(f'Use distinct instrument IDs for different atomic lines: {key!r}.')
-        config = copy.deepcopy(valid_config)
-        ds_type = config.pop('type').lower()
-        dataset_class = self._dataset_class(ds_type)
-        files = self._load_IQUV_files(config.pop('data_path')) if ds_type in ('hmi', 'test') else self._load_all_files(config.pop('data_path'))
-        sample_idx = config.pop('sample_idx', None)
-        files = self._select_files(files, config, ds_type, select_sample=False)
-        if not files.__len__():
-            raise ValueError('No validation files matched.')
-        sample_idx = len(files)//2 if sample_idx is None else sample_idx
-        if not isinstance(sample_idx, int) or not 0 <= sample_idx < len(files):
-            raise ValueError(f'Validation sample_idx {sample_idx} exceeds {len(files)} files.')
-        normalization = config.pop('stokes_normalization', stokes_normalization)
-        config.pop('oversample_factor', None)
-        config.pop('polarization_filter', None)
-        for selected in progress(files[sample_idx:sample_idx+1], desc='Loading validation data'):
-            self.valid_dataset = dataset_class(selected, ds_id='valid', **common,
-                         stokes_normalization=normalization, batch_size=batch_size,
-                         filter_nans=False, shuffle=False, **config)
-        self._register_hmi_dataset_response(self.valid_dataset)
-        key = self.valid_dataset.instrument_id
-        if self.stokes_normalization_by_instrument.get(key) != self.valid_dataset.stokes_normalization:
-            raise ValueError('Validation instrument and normalization must match training.')
-        trained = self.wavelength_config[key]
-        validation = self.valid_dataset.wavelength_config
-        if (trained['wavelength_grid'].size != validation['wavelength_grid'].size or
-                not np.isclose(trained['wavelength_center'].to_value(u.m),
-                               validation['wavelength_center'].to_value(u.m),rtol=1e-12,atol=0)):
-            raise ValueError('Validation wavelength count and line center must match the same instrument ID. '
-                             'Use distinct instrument IDs for distinct spectral setups.')
+        self.valid_datasets = []
+        validations = valid_config if isinstance(valid_config, list) else [valid_config]
+        for index, valid_config in enumerate(validations):
+            config = copy.deepcopy(valid_config)
+            ds_type = config.pop('type').lower()
+            dataset_class = self._dataset_class(ds_type)
+            files = self._load_files(config.pop('data_path'), ds_type)
+            sample_idx = config.pop('sample_idx', None)
+            files = self._select_files(files, config, ds_type, select_sample=False)
+            if not files.__len__():
+                raise ValueError('No validation files matched.')
+            sample_idx = len(files)//2 if sample_idx is None else sample_idx
+            if not isinstance(sample_idx, int) or not 0 <= sample_idx < len(files):
+                raise ValueError(f'Validation sample_idx {sample_idx} exceeds {len(files)} files.')
+            normalization = config.pop('stokes_normalization', stokes_normalization)
+            config.pop('oversample_factor', None)
+            config.pop('polarization_filter', None)
+            for selected in progress(files[sample_idx:sample_idx+1], desc='Loading validation data'):
+                dataset = dataset_class(selected, ds_id='valid' if index == 0 else f'valid_{index:02d}', **common,
+                             stokes_normalization=normalization, batch_size=batch_size,
+                             filter_nans=False, shuffle=False, **config)
+            self._register_hmi_dataset_response(dataset)
+            key = dataset.instrument_id
+            if self.stokes_normalization_by_instrument.get(key) != dataset.stokes_normalization:
+                raise ValueError('Validation instrument and normalization must match training.')
+            trained = self.wavelength_config[key]
+            validation = dataset.wavelength_config
+            if (trained['wavelength_grid'].size != validation['wavelength_grid'].size or
+                    not np.isclose(trained['wavelength_center'].to_value(u.m),
+                                   validation['wavelength_center'].to_value(u.m),rtol=1e-12,atol=0)):
+                raise ValueError('Validation wavelength count and line center must match the same instrument ID. '
+                                 'Use distinct instrument IDs for distinct spectral setups.')
+            self.valid_datasets.append(dataset)
+        self.valid_dataset = self.valid_datasets[0]
         self.times = [d.time for d in self.train_datasets]
         self.image_shape = self.valid_dataset.image_shape
         self.value_range = self.valid_dataset.value_range
@@ -210,7 +219,7 @@ class SphericalDataModule(LightningDataModule):
             config = copy.deepcopy(source)
             ds_type = config.pop('type').lower()
             paths = config.pop('data_path')
-            files = self._load_IQUV_files(paths) if ds_type in ('hmi','test') else self._load_all_files(paths)
+            files = self._load_files(paths, ds_type)
             files = self._select_files(files, config, ds_type)
             for group in files:
                 path = np.asarray(group, dtype=object).reshape(-1)[0]
@@ -247,10 +256,20 @@ class SphericalDataModule(LightningDataModule):
             files = files[:count]
         return files
 
+    @property
+    def observations(self):
+        if getattr(self, '_observations', None) is None:
+            self._observations = self.get_observations()
+        return self._observations
+
+    @observations.setter
+    def observations(self, value):
+        self._observations = value
+
     def get_observations(self):
         """Return a JSON-safe acquisition registry for snapshots and exports."""
         rows = []
-        for role, datasets in [('train', self.train_datasets), ('validation', [self.valid_dataset])]:
+        for role, datasets in [('train', self.train_datasets), ('validation', getattr(self, 'valid_datasets', [self.valid_dataset]))]:
             for dataset in datasets:
                 row = copy.deepcopy(dataset.observation)
                 row['role'] = role
@@ -420,10 +439,15 @@ class SphericalDataModule(LightningDataModule):
         with fits.open(representative_file, memmap=False) as hdus:
             data_hdu = config.get('data_hdu', 0)
             if ds_type in ('hmi', 'test'):
-                data_hdu = next((i for i, h in enumerate(hdus) if 'DATE-OBS' in h.header), None)
+                required_time = 'T_OBS' if ds_type == 'hmi' else 'DATE-OBS'
+                data_hdu = next((i for i, h in enumerate(hdus) if required_time in h.header), None)
                 if data_hdu is None:
-                    raise ValueError(f'Missing DATE-OBS in {representative_file!r}.')
+                    raise ValueError(f'Missing {required_time} in {representative_file!r}.')
             header = observation_header(hdus, data_hdu, config.get('spatial_header_hdu'))
+        if ds_type == 'hmi':
+            return hmi_observation_time(header)
+        if ds_type == 'hinode' and 'DATE-OBS' not in header and 'DATE_OBS' in header:
+            header['DATE-OBS'] = header['DATE_OBS']
         header.update(config.get('observer') or {})
         return observation_times(header, config.get('time_reference', 'observation'),
                                  config.get('time_scale'))[1]
@@ -452,6 +476,16 @@ class SphericalDataModule(LightningDataModule):
         if isinstance(files, np.ndarray):
             return np.asarray(selected, dtype=files.dtype)
         return selected
+
+    def _load_files(self, data_path, ds_type):
+        if ds_type in ('hmi', 'test'):
+            return self._load_IQUV_files(data_path)
+        files = self._load_all_files(data_path)
+        if ds_type == 'hinode':
+            header = fits.getheader(files[0])
+            if 'SLITINDX' in header and 'SPNAXES' not in header:
+                return [files]
+        return files
 
     def _load_all_files(self, data_path):
         paths = [data_path] if isinstance(data_path, (str, os.PathLike)) else data_path
@@ -489,19 +523,29 @@ class SphericalDataModule(LightningDataModule):
             'batch_size': None,
             'sampler': sampler,
             'num_workers': self.num_workers,
-            'pin_memory': False,
+            'pin_memory': self.pin_memory,
         }
         if self.num_workers > 0:
-            loader_kwargs.update(prefetch_factor=2, persistent_workers=True, multiprocessing_context='spawn')
+            loader_kwargs.update(prefetch_factor=self.prefetch_factor, persistent_workers=self.persistent_workers, multiprocessing_context='spawn')
         loader = DataLoader(**loader_kwargs)
         return loader
 
     def val_dataloader(self):
-        self.valid_dataset.batch_size = self.batch_size
-        options = {'multiprocessing_context': 'spawn'} if self.num_workers > 0 else {}
-        data_loader = DataLoader(self.valid_dataset, batch_size=None, num_workers=self.num_workers,
-                                 pin_memory=False, shuffle=False, **options)
-        return data_loader
+        datasets = []
+        for index, source in enumerate(getattr(self, 'valid_datasets', [self.valid_dataset])):
+            source.batch_size = self.batch_size
+            dataset = copy.copy(source)
+            dataset.validation_index = index
+            if hasattr(dataset, 'profile_rows'):
+                # Sequential reads, followed by native-pixel ordering in plots.
+                dataset.profile_rows = range(len(dataset.profile_rows))
+                dataset.include_pixel_index = True
+            datasets.append(dataset)
+        dataset = datasets[0] if len(datasets) == 1 else torch.utils.data.ConcatDataset(datasets)
+        options = {'multiprocessing_context': 'spawn', 'prefetch_factor': self.prefetch_factor,
+                   'persistent_workers': self.persistent_workers} if self.num_workers > 0 else {}
+        return DataLoader(dataset, batch_size=None, num_workers=self.num_workers,
+                          pin_memory=self.pin_memory, shuffle=False, **options)
 
 
 class SphericalDataset(TensorsDataset):
@@ -509,7 +553,8 @@ class SphericalDataset(TensorsDataset):
     def __init__(self, stokes, map_data, wavelength_config, ds_id, instrument_id, seconds_per_dt, Rs_per_ds, ref_time,
                  stokes_normalization, work_directory, oversample_factor=1,
                  store_plot_image=False, mu_limit=1e-3, pixel_mask=None, line_id="fe-i-6173",
-                 observation_metadata=None, polarization_filter=None, loss_weight=1.0, **kwargs):
+                 observation_metadata=None, polarization_filter=None, loss_weight=1.0,
+                 source_stokes=None, wavelength_indices=None, observation_seed=0, **kwargs):
         self.ds_id = ds_id
         self.line_id = line_id
         self.instrument_id = instrument_id
@@ -555,6 +600,8 @@ class SphericalDataset(TensorsDataset):
         mu = map_data['mu']
         spherical_coords = map_data['spherical_coords']
         v_obs_los = map_data['v_obs_los']
+        source_stokes = stokes if source_stokes is None else source_stokes
+        wavelength_indices = np.arange(stokes.shape[-1]) if wavelength_indices is None else wavelength_indices
         stokes = np.asarray(stokes, dtype=np.float32) / self.stokes_normalization
         valid = np.isfinite(stokes).all(axis=(-2, -1))
         valid &= np.isfinite(spherical_coords).all(axis=-1)
@@ -596,7 +643,8 @@ class SphericalDataset(TensorsDataset):
             **metadata, 'id': ds_id, 'instrument_id': instrument_id, 'line_id': line_id,
             'shape': list(self.image_shape), 'header': header_dict,
             'valid_mask_bits': base64.b64encode(np.packbits(native_valid).tobytes()).decode('ascii'),
-            'time': metadata.get('time', {'model_time': self.time.isoformat(), 'time_reference': 'observation'}),
+            'time': {**metadata.get('time', {'model_time': self.time.isoformat(), 'time_reference': 'observation'}),
+                     'geometry_time': map_data.get('geometry_time', self.time.isoformat())},
             'source_paths': metadata.get('source_paths', []),
             'obs_lon': float(self.obs_lon.to_value(u.rad)),
             'obs_lat': float(self.obs_lat.to_value(u.rad)), 'pAng': float(self.pAng.to_value(u.rad)),
@@ -636,33 +684,31 @@ class SphericalDataset(TensorsDataset):
         # after filtering/shuffling without storing any derived geometry.
         filter_nans = kwargs.pop('filter_nans', True)
         shuffle = kwargs.pop('shuffle', True)
-        flat_stokes = stokes.reshape((-1, *stokes.shape[2:]))
-        tensors = {'stokes': flat_stokes[valid.ravel()] if filter_nans else flat_stokes}
-        if 'pixel_time_offsets' in map_data:
-            offsets = np.asarray(map_data['pixel_time_offsets'], dtype=np.float32).reshape(-1, 1) / seconds_per_dt
-            tensors['time_offset'] = offsets[valid.ravel()] if filter_nans else offsets
-        if filter_nans or shuffle:
-            count = int(np.prod(self.image_shape))
-            index_dtype = np.int32 if count <= np.iinfo(np.int32).max else np.int64
-            indices = np.arange(count, dtype=index_dtype)[:, None]
-            tensors['pixel_index'] = indices[valid.ravel()] if filter_nans else indices
-        super().__init__(tensors=tensors, work_directory=work_directory,
-                         filter_nans=False, shuffle=shuffle, **kwargs)
+        ObservationView.prepare(self, source_stokes, valid, map_data.get('pixel_time_offsets'),
+                                wavelength_indices, work_directory, kwargs.pop('batch_size'),
+                                filter_nans, shuffle, observation_seed)
 
     def __getitem__(self, idx):
         out = super().__getitem__(idx)
         out['instrument_id'] = self.instrument_id
+        if hasattr(self, 'validation_index'):
+            out['validation_index'] = torch.tensor([self.validation_index], dtype=torch.long)
+            out['image_shape'] = torch.tensor(self.image_shape, dtype=torch.long)
         out['sample_weight'] = torch.full((len(out['stokes']), 1), self.loss_weight, dtype=torch.float32)
         pixel_index = out.pop('pixel_index', None)
         if pixel_index is None:
             pixel_index = np.arange(idx * self.batch_size, idx * self.batch_size + len(out['stokes']))
         else:
             pixel_index = pixel_index.numpy().reshape(-1)
+        if getattr(self, 'include_pixel_index', False):
+            out['pixel_index'] = torch.from_numpy(pixel_index.copy())
         geometry = spherical_geometry_from_pixels(
             pixel_index, self.image_shape, self.wcs,
             self.obs_lon.to_value(u.rad), self.obs_lat.to_value(u.rad),
             self.pAng.to_value(u.rad), self.observer_distance, self.observer_velocity,
             self.Rs_per_ds, self.normalized_time,
+            slit_pixel_world=getattr(self, 'slit_pixel_world', None),
+            slit_geometry=getattr(self, 'slit_geometry', None),
         )
         time_offset = out.pop('time_offset', None)
         if time_offset is not None:
@@ -686,14 +732,18 @@ class SphericalDataset(TensorsDataset):
 
 def spherical_geometry_from_pixels(pixel_index, image_shape, wcs, obs_lon, obs_lat,
                                    p_angle, observer_distance, observer_velocity,
-                                   Rs_per_ds, normalized_time):
+                                   Rs_per_ds, normalized_time, slit_pixel_world=None, slit_geometry=None):
     """Reconstruct a batch's surface geometry from pixel IDs and frame metadata.
 
     WCS supplies helioprojective angles. Analytic ray/sphere intersection avoids
     constructing SunPy coordinate objects on every dataset read.
     """
     row, column = np.divmod(pixel_index, image_shape[1])
-    if tuple(wcs.wcs.ctype) != ('HPLN-TAN', 'HPLT-TAN'):
+    if slit_geometry is not None:
+        obs_lon, obs_lat, p_angle, observer_distance, observer_velocity = (
+            np.asarray(slit_geometry[key])[column] for key in
+            ('obs_lon', 'obs_lat', 'pAng', 'observer_distance', 'observer_velocity'))
+    if slit_pixel_world is None and tuple(wcs.wcs.ctype) != ('HPLN-TAN', 'HPLT-TAN'):
         # Any valid solar WCS can use the SunPy coordinate path. TAN frames
         # retain the analytic ray/sphere fast path used by full-disk HMI.
         world = wcs.pixel_to_world(column, row)
@@ -709,11 +759,16 @@ def spherical_geometry_from_pixels(pixel_index, image_shape, wcs, obs_lon, obs_l
         coords = np.concatenate([spherical_to_cartesian(spherical)/Rs_per_ds,
                                  np.full((*lon.shape,1),normalized_time)],axis=-1)
         return {'coords':coords, 'mu':mu[...,None],
+                'image_p_angle': np.broadcast_to(p_angle, lon.shape)[..., None].copy(),
                 'cartesian_to_spherical_transform':c2s, 'rtp_to_img_transform':rtp2img,
                 'v_obs_los':(ray @ observer_velocity)[...,None], 'pix':pix}
-    tx, ty = wcs.pixel_to_world_values(column, row)
-    tx = np.asarray(tx) * u.Unit(wcs.wcs.cunit[0]).to(u.rad)
-    ty = np.asarray(ty) * u.Unit(wcs.wcs.cunit[1]).to(u.rad)
+    if slit_pixel_world is not None:
+        x0, y0, dx, dy = np.asarray(slit_pixel_world)[:, column]
+        tx, ty = (x0+dx*row)*u.arcsec.to(u.rad), (y0+dy*row)*u.arcsec.to(u.rad)
+    else:
+        tx, ty = wcs.pixel_to_world_values(column, row)
+        tx = np.asarray(tx) * u.Unit(wcs.wcs.cunit[0]).to(u.rad)
+        ty = np.asarray(ty) * u.Unit(wcs.wcs.cunit[1]).to(u.rad)
     dx, dy, dz = np.cos(ty) * np.sin(tx), np.sin(ty), np.cos(ty) * np.cos(tx)
     discriminant = 1 - observer_distance ** 2 * (dx ** 2 + dy ** 2)
     with np.errstate(invalid='ignore'):
@@ -721,9 +776,10 @@ def spherical_geometry_from_pixels(pixel_index, image_shape, wcs, obs_lon, obs_l
     surface = np.stack([travel * dx, travel * dy, observer_distance - travel * dz], axis=-1)
     # Observer-centered west/north/radial axes expressed in Carrington Cartesian.
     sl, cl, sb, cb = np.sin(obs_lon), np.cos(obs_lon), np.sin(obs_lat), np.cos(obs_lat)
-    observer_basis = np.array([[-sl, -sb * cl, cb * cl],
-                               [cl, -sb * sl, cb * sl], [0., cb, sb]])
-    xyz = surface @ observer_basis.T
+    observer_basis = np.stack([np.stack([-sl, -sb*cl, cb*cl], axis=-1),
+                               np.stack([cl, -sb*sl, cb*sl], axis=-1),
+                               np.stack([np.zeros_like(sl), cb, sb], axis=-1)], axis=-2)
+    xyz = np.einsum('...ij,...j->...i', observer_basis, surface)
     lon = np.arctan2(xyz[..., 1], xyz[..., 0])
     lat = np.arctan2(xyz[..., 2], np.hypot(xyz[..., 0], xyz[..., 1]))
     spherical = np.stack([np.ones_like(lon), np.pi / 2 - lat, lon], axis=-1)
@@ -732,12 +788,13 @@ def spherical_geometry_from_pixels(pixel_index, image_shape, wcs, obs_lon, obs_l
         lon, lat, obs_lon, obs_lat, p_angle, observer_distance=observer_distance,
     ), -1, -2)
     ray = np.stack([-dx, -dy, dz], axis=-1)
-    v_obs_los = ray @ observer_velocity
+    v_obs_los = np.sum(ray*observer_velocity, axis=-1)
     pixel_center = (np.asarray(image_shape) - 1) / 2
     pix = (np.stack([row, column], axis=-1) - pixel_center) / max(*pixel_center, 1.)
     coords = np.concatenate([spherical_to_cartesian(spherical) / Rs_per_ds,
                              np.full((*lon.shape, 1), normalized_time)], axis=-1)
     return {'coords': coords, 'mu': rtp2img[..., 2, 0:1].copy(),
+            'image_p_angle': np.broadcast_to(p_angle, lon.shape)[..., None].copy(),
             'cartesian_to_spherical_transform': c2s, 'rtp_to_img_transform': rtp2img,
             'v_obs_los': v_obs_los[..., None], 'pix': pix}
 
@@ -817,12 +874,12 @@ class HMISphericalDataset(SphericalDataset):
         self.spectral_response_file = os.fspath(
             resolve_hmi_transmission_profile(transmission_profile_directory, ref_file)
         )
-        source_map = load_hmi_date_obs_map(ref_file)
+        source_map = load_hmi_map(ref_file)
         s_map = source_map
         if resolution is not None:
             s_map = s_map.resample(resolution * u.pix)
         map_data = load_map_data(s_map)
-        # The map frame and latent coordinate now share the same DATE-OBS time.
+        # The WCS and model share the effective T_OBS epoch.
         # T_REC remains only the JSOC/calibration record identity.
         map_data['time'] = SphericalDataModule._hmi_date_obs(ref_file)
         map_data['detector_mapping'] = hmi_detector_mapping(source_map, output_shape=s_map.data.shape)
@@ -845,8 +902,8 @@ class HMISphericalDataset(SphericalDataset):
 
         # The optional filter is applied before flattening and cache shuffling.
         with fits.open(ref_file, memmap=False) as hdus:
-            native_header = next(h.header.copy() for h in hdus if 'DATE-OBS' in h.header)
-        timing, _ = observation_times(native_header)
+            native_header = observation_header(hdus, next(i for i, h in enumerate(hdus) if 'T_OBS' in h.header), None)
+        timing = hmi_time_metadata(native_header)
         kwargs['observation_metadata'] = {'source_paths': [str(os.path.abspath(p)) for p in np.asarray(data).ravel()],
                                           'dataset_type': 'hmi', 'time': timing,
                                           'original_header': native_header.tostring(sep='\n', endcard=False, padding=False)}
@@ -901,7 +958,7 @@ class HMISphericalDataset(SphericalDataset):
             shape = (header['NAXIS2'], header['NAXIS1'])
             origin = tuple(None if header.get(key) is None else float(header[key])
                            for key in ('CCD_X0', 'CCD_Y0'))
-            return shape, observation_times(header)[1], origin, WCS(header, naxis=2)
+            return shape, hmi_observation_time(header), origin, WCS(header, naxis=2)
 
         reference_path = paths[0]
         reference_shape, reference_time, reference_origin, reference_wcs = metadata(reference_path)
@@ -917,7 +974,7 @@ class HMISphericalDataset(SphericalDataset):
                 errors.append(f'{segment_name}: shape {shape} != {reference_shape}')
                 continue
             if segment_time != reference_time:
-                errors.append(f'{segment_name}: DATE-OBS {segment_time.isoformat()} != {reference_time.isoformat()}')
+                errors.append(f'{segment_name}: T_OBS {segment_time.isoformat()} != {reference_time.isoformat()}')
             if (None in reference_origin) != (None in segment_origin) or None not in reference_origin and not np.allclose(
                     segment_origin, reference_origin, rtol=0, atol=tolerance_pixels):
                 errors.append(f'{segment_name}: detector origin {segment_origin} != {reference_origin}')
@@ -991,19 +1048,56 @@ class FITSSphericalDataset(SphericalDataset):
             map_data['detector_mapping'] = origin / (detector_size-1), step/(detector_size-1)
         SphericalDataset.__init__(self, observation['stokes'], map_data,
                        observation['wavelength_config'], line_id=line_id,
-                       observation_metadata=observation['metadata'], **kwargs)
+                       observation_metadata=observation['metadata'],
+                       source_stokes=observation.get('source_stokes'),
+                       wavelength_indices=observation.get('wavelength_indices'), **kwargs)
 
 
 class HinodeSphericalDataset(FITSSphericalDataset):
-    """Prepared Hinode/SP rasters use the same spherical WCS and geometry API.
-
-    Use data.prepare_hinode.prepare_hinode_raster to combine slit products
-    with an explicitly validated raster WCS, preserving their acquisition times.
-    """
+    """Assemble calibrated slit scans in memory, retaining native positions/times."""
     def __init__(self, data, **kwargs):
         kwargs.setdefault('line_id', 'fe-i-6302')
-        kwargs.setdefault('axis_order', ['stokes', 'wavelength', 'y', 'x'])
-        super().__init__(data, **kwargs)
+        if isinstance(data, (list, tuple)) or os.path.isdir(os.fspath(data)):
+            from spinnme.data.hinode import read_hinode_slits
+            files = sorted(glob.glob(os.path.join(data, '*.fits'))) if isinstance(data, (str, os.PathLike)) else data
+            line_id = kwargs.pop('line_id')
+            # Raw slits carry their own axes, wavelengths and scan timing.
+            options = {key: kwargs.pop(key) for key in ('wavelength_center', 'wavelength_range') if key in kwargs}
+            for key in ('data_hdu', 'axis_order', 'stokes_order', 'wavelength_grid', 'wavelength_unit',
+                        'wavelength_grid_is_offsets', 'wavelength_hdu', 'time_reference', 'time_hdu'):
+                kwargs.pop(key, None)
+            observation = read_hinode_slits(files, line_id=line_id, **options)
+            reference = Map(observation['stokes'][..., 0, 0], observation['header'])
+            y, _ = np.indices(observation['stokes'].shape[:2])
+            x0, y0, dx, dy = observation['slit_pixel_world']
+            world = (x0[None, :]+dx[None, :]*y, y0[None, :]+dy[None, :]*y)
+            map_data = load_map_data(reference, world_coordinates=world)
+            map_data.update(time=observation['model_time'],
+                            pixel_time_offsets=observation['pixel_time_offsets'])
+            self.slit_pixel_world = observation['slit_pixel_world']
+            self.slit_geometry = observation['slit_geometry']
+            # Bounds and masks must use the same per-slit physical frames as batches.
+            shape = observation['stokes'].shape[:2]
+            geometry = spherical_geometry_from_pixels(np.arange(np.prod(shape)), shape, map_data['wcs'],
+                map_data['obs_lon'].to_value(u.rad), map_data['obs_lat'].to_value(u.rad),
+                map_data['pAng'].to_value(u.rad), map_data['observer_distance'], map_data['observer_velocity'],
+                1., 0., slit_pixel_world=self.slit_pixel_world, slit_geometry=self.slit_geometry)
+            xyz = geometry['coords'][:, :3]
+            spherical = np.stack([np.ones(len(xyz)), np.arctan2(np.hypot(xyz[:, 0], xyz[:, 1]), xyz[:, 2]),
+                                  np.arctan2(xyz[:, 1], xyz[:, 0])], axis=-1)
+            map_data.update(spherical_coords=spherical.reshape((*shape, 3)),
+                            mu=geometry['mu'].reshape(shape), v_obs_los=geometry['v_obs_los'].reshape(shape))
+            SphericalDataset.__init__(self, observation['stokes'], map_data,
+                observation['wavelength_config'], line_id=line_id,
+                observation_metadata=observation['metadata'],
+                       source_stokes=observation.get('source_stokes'),
+                       wavelength_indices=observation.get('wavelength_indices'), **kwargs)
+        else:
+            kwargs.setdefault('axis_order', ['stokes', 'wavelength', 'y', 'x'])
+            with fits.open(data) as hdus:
+                if 'TIME_OFFSETS' in hdus:
+                    kwargs.setdefault('time_hdu', 'TIME_OFFSETS')
+            super().__init__(data, **kwargs)
         self.observation['dataset_type'] = 'hinode'
 
 
@@ -1035,7 +1129,7 @@ class TestSphericalDataset(SphericalDataset):
 
         stokes_i_files, _, _, _ = data
         ref_file = stokes_i_files[0]
-        s_map = load_hmi_date_obs_map(ref_file)
+        s_map = Map(ref_file)
         map_data = load_map_data(s_map)
         stokes = load_stokes_data(data)
 
@@ -1055,7 +1149,7 @@ def load_stokes_data(files, resolution: tuple[int, int] | None = None):
     stokes = None
     for index, path in enumerate(files.ravel()):
         image = (fits.getdata(path, memmap=False) if resolution is None else
-                 load_hmi_date_obs_map(path).resample(np.asarray(resolution)*u.pix).data)
+                 Map(path).resample(np.asarray(resolution)*u.pix).data)
         image = np.asarray(image)
         if image.ndim != 2:
             raise ValueError(f'Stokes segment must be a 2D image: {path}.')
@@ -1080,11 +1174,12 @@ def require_observer_metadata(s_map):
         raise ValueError(f'Explicit observer geometry metadata are required: {missing}')
 
 
-def load_map_data(s_map):
+def load_map_data(s_map, world_coordinates=None):
     require_observer_metadata(s_map)
-    time = s_map.date.to_datetime()
+    time = s_map.reference_date.to_datetime()
     # convert world coordinates to cartesian
-    map_coords = all_coordinates_from_map(s_map)
+    map_coords = (all_coordinates_from_map(s_map) if world_coordinates is None else
+                  SkyCoord(world_coordinates[0]*u.arcsec, world_coordinates[1]*u.arcsec, frame=s_map.coordinate_frame))
 
     carrington_coords = map_coords.transform_to(frames.HeliographicCarrington)
     lat, lon = carrington_coords.lat.to_value(u.rad), carrington_coords.lon.to_value(u.rad)
@@ -1111,7 +1206,8 @@ def load_map_data(s_map):
             'obs_lat': obs_lat, 'obs_lon': obs_lon, 'pAng': pAng,
             'observer_distance': observer_distance,
             'observer_velocity': observer_velocity_from_header(s_map.meta).tolist(),
-            'time': time, 'spherical_coords': spherical_coords, 'wcs': s_map.wcs,
+            'time': time, 'geometry_time': s_map.reference_date.utc.isot,
+            'spherical_coords': spherical_coords, 'wcs': s_map.wcs,
             'instrument': s_map.instrument, 'header': s_map.fits_header}
 
 

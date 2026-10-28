@@ -23,7 +23,8 @@ TRAINING_KEYS = {'epochs', 'max_steps', 'check_val_every_n_epoch', 'val_check_in
                  'accumulate_grad_batches'}
 DATA_KEYS = {'train_configs', 'valid_config', 'seconds_per_dt', 'Rs_per_ds', 'gauss_per_dB',
              'stokes_normalization', 'ref_time', 'batch_size', 'dataset_batch_size', 'num_workers',
-             'num_dataset_workers', 'balance_train_configs', 'preparation_seed'}
+             'num_dataset_workers', 'balance_train_configs', 'preparation_seed',
+             'prefetch_factor', 'persistent_workers', 'pin_memory'}
 DATASET_KEYS = {'type', 'data_path', 'instrument_id', 'line_id', 'loss_weight', 'stokes_normalization',
                 'data_hdu', 'spatial_header_hdu', 'axis_order', 'stokes_order', 'stokes_signs',
                 'wavelength_center', 'wavelength_grid', 'wavelength_unit', 'wavelength_grid_is_offsets',
@@ -193,9 +194,10 @@ def validate_config(config, *, require_input=True):
     if len(instruments) != len(definitions):
         raise ValueError('Instrument identifiers must be unique.')
     validation = data.get('valid_config')
-    if not isinstance(validation, dict):
-        raise ValueError('data.valid_config must select a spherical validation/diagnostic observation.')
-    for dataset in [*datasets, validation]:
+    validations = validation if isinstance(validation, list) else [validation]
+    if not validations or any(not isinstance(value, dict) for value in validations):
+        raise ValueError('data.valid_config must be a dataset mapping or a nonempty list of dataset mappings.')
+    for dataset in [*datasets, *validations]:
         if not isinstance(dataset, dict):
             raise ValueError('Each dataset configuration must be a YAML mapping.')
         unknown_dataset = set(dataset) - DATASET_KEYS
@@ -205,6 +207,10 @@ def validate_config(config, *, require_input=True):
             raise ValueError(f"Unsupported spherical dataset type {dataset.get('type')!r}.")
         if dataset.get("instrument_id") not in instruments:
             raise ValueError(f"Dataset instrument_id {dataset.get('instrument_id')!r} has no instrument definition.")
+        if dataset.get('type') == 'hinode':
+            definition = next(row for row in definitions if row['instrument_id'] == dataset['instrument_id'])
+            if definition.get('type') != 'hinode':
+                raise ValueError('Calibrated Hinode data require instrument type: hinode for solar-frame polarization.')
         if require_input and not dataset.get("data_path"):
             raise ValueError("Supply --input or data.train_configs[*].data_path.")
     return config
@@ -251,7 +257,8 @@ def resolve_config(source, *, overrides=(), input_path=None, output=None, work_p
                 raise ValueError('Instrument data settings must be a YAML mapping.')
             datasets = [config['data']['train_configs'][0]]
             if 'valid_config' in config['data']:
-                datasets.append(config['data']['valid_config'])
+                validation = config['data']['valid_config']
+                datasets.extend(validation if isinstance(validation, list) else [validation])
             for dataset in datasets:
                 dataset.update(deepcopy(changes))
                 dataset['instrument_id'] = forward['instrument_id']
@@ -262,7 +269,9 @@ def resolve_config(source, *, overrides=(), input_path=None, output=None, work_p
             if index == 0 or dataset.get("data_path") is None:
                 dataset["data_path"] = input_path
         if "valid_config" in config["data"]:
-            config["data"]["valid_config"]["data_path"] = input_path
+            validation = config["data"]["valid_config"]
+            for dataset in validation if isinstance(validation, list) else [validation]:
+                dataset["data_path"] = input_path
     if output is not None:
         variables['run_path'] = str(output)
         config['path'] = '<<run_path>>'

@@ -4,11 +4,42 @@ Use `spinnme.run()` to train and `spinnme.load()` to export. The [Python export 
 
 ## Run an inversion
 
-```{py:function} spinnme.run(config, **kwargs)
+```{py:function} spinnme.run(config, *, resume=False, profile=False, reload=False)
 Train from a YAML path, bundled preset or configuration dictionary. Optional `resume`, `reload` and `profile` control execution. Returns `(module, data_module, trainer)` and writes `inversion.pme` to the configured output directory.
 ```
 
-To apply typed overrides from Python:
+A complete Python dictionary can be passed directly, without saving an input YAML:
+
+```python
+from spinnme import run
+
+observation = {
+    "type": "fits", "data_path": "data/*.fits", "instrument_id": "USER",
+    "axis_order": ["wavelength", "stokes", "y", "x"],
+    "stokes_normalization": 1.0,
+}
+config = {
+    "path": "runs/custom",
+    "data": {"train_configs": [observation], "valid_config": dict(observation, sample_idx=0),
+             "num_workers": 4, "num_dataset_workers": 0},
+    "instrument": [{"type": "generic", "instrument_id": "USER", "line_id": "fe-i-6173"}],
+    "model": {"type": "mlp", "dim": 64, "n_layers": 3, "vector_potential": False},
+    "training": {"max_steps": 1000, "optimizer_config": {"type": "adamw"}},
+    "logging": {"mode": "disabled"},
+}
+if __name__ == "__main__":
+    module, data_module, trainer = run(config)
+```
+
+Use calibrated Fe I 6173 input with spatial/observer/time and wavelength metadata. The
+[Colab notebooks](colab.md) contain full dictionaries for every supported workflow.
+`run()` copies and validates the input dictionary, including all model, instrument,
+normalization, objective and training settings. The caller's dictionary is unchanged.
+The runner writes `resolved.yaml` alongside the results for provenance and resume.
+YAML remains supported by the same interface: `run("inversion.yaml")` (or a
+`pathlib.Path`), as well as `spinnme run --config inversion.yaml` from the CLI.
+
+To start from a bundled preset and apply typed overrides from Python:
 
 ```python
 from spinnme import run
@@ -30,7 +61,8 @@ config = resolve_config(
     "hmi/full_disk", output="runs/hmi-python",
     bindings={"data_path": "data/hmi"},
 )
-module, data_module, trainer = run(config)
+if __name__ == "__main__":
+    module, data_module, trainer = run(config)
 ```
 
 Training automatically detects the accelerator and available devices unless configured otherwise. `run()` returns training objects. Load the saved `runs/hmi-python/inversion.pme` to obtain a snapshot for exports.
@@ -69,7 +101,7 @@ Return normalized model `coords` in xyzt order, projection matrices, `mu`, obser
 ```
 
 ```{py:method} spinnme.snapshots.Snapshot.sample(coordinates, *, observation=None, time=None, **kwargs)
-Evaluate physical `SkyCoord` positions using the same products, synthesis, units and batching as maps. `observation` selects the fixed observer/calibration. Samples use one simultaneous epoch, independently of the saved pixel support and raster times. The result retains the coordinates and supports NPZ; FITS images and SunPy maps require an image grid. Raw numerical coordinates with implicit units are not accepted.
+Evaluate physical `SkyCoord` positions using the same products, synthesis, units and batching as maps. `observation` selects the observer/calibration. Pass a scalar `time` for a simultaneous epoch, or a time array broadcastable to the coordinate shape for exact scan times; times are sliced together with coordinates across batches. Helioprojective coordinates with per-point observation times retain their own observers and epochs for spatial and magnetic projections. Samples are independent of saved pixel support and raster offsets. The result retains the coordinates and supports NPZ; FITS images and SunPy maps require an image grid. Raw numerical coordinates with implicit units are not accepted.
 ```
 
 ```{py:method} spinnme.snapshots.Snapshot.cadence_times(cadence_seconds, *, instrument_id=None)
@@ -83,7 +115,7 @@ Return regular UTC epochs within the instrument's saved training span, including
 ```
 
 ```{py:method} spinnme.exports.EvaluationResult.write_fits(directory, *, overwrite=False)
-Write one FITS file per parameter, including WCS, units and validity mask. Returns output paths.
+Write one FITS file per parameter, including WCS, units and validity mask. Native slit grids include exact `X_COORDINATE`/`Y_COORDINATE` images in arcseconds; scanned grids include UTC `TIME_OFFSETS`. Returns output paths.
 ```
 
 ```{py:method} spinnme.exports.EvaluationResult.write_npz(path, *, overwrite=False)

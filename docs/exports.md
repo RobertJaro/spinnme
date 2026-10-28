@@ -53,6 +53,11 @@ Specify exactly the keys you need, for example `--parameters Brtp Vdop Blos vmac
 | NPZ | Named arrays, validity mask, WCS header, units and metadata in one file. Read with `spinnme.exports.read_npz()`. |
 | JPG | Scalar-map previews with WCS axes, units and a metadata sidecar. Use FITS or NPZ for scientific analysis. |
 
+Saved slit grids also include `X_COORDINATE` and `Y_COORDINATE` image extensions
+in arcseconds. These retain exact native pointing even when the primary image's
+WCS is only a nominal display approximation. Per-slit viewing geometry and roll
+remain in the `PROVENANCE` JSON extension.
+
 Native raster exports retain scan timing: FITS includes a spatial `TIME_OFFSETS` extension in seconds from its UTC `DATEREF`, and NPZ metadata retains the offsets and their axis. An explicit `--time` evaluates the whole grid simultaneously and omits native scan offsets.
 
 Invalid and off-disk pixels remain NaN. Source masks are preserved on saved grids; `--mu-limit` can exclude more of the limb. Write spectra as FITS or NPZ and vector diagnostics as NPZ. The scalar `Artifact` group also supports JPG.
@@ -82,3 +87,15 @@ spinnme export runs/hmi/inversion.pme --observation data/reference-grid.fits --i
 The reference FITS supplies spatial WCS, observer position and the geometry epoch; observer velocity keywords are optional. Select an instrument ID present in the snapshot. `--time` changes the model epoch while retaining that observing geometry. For a changing viewpoint, provide the correct reference geometry for each epoch. External grids need their own quality masks and must lie within the fitted region.
 
 Use `.pme` files for inference and `last.ckpt` for [resuming training](training.md).
+
+Snapshots and exports record coordinate convention version 2. Azimuth is
+counterclockwise from image +y, modulo 180 degrees. Hinode synthesis separately
+accounts for its solar-frame Q/U basis and slit roll; HMI retains its image-frame
+polarization convention. HMI headers preserve exposure start and record slot,
+normalize `T_OBS` to an explicit TAI label, and provide the same effective epoch
+as UTC `DATE-AVG`. Original time cards remain in provenance. Saved `model_time`
+and `geometry_time` are explicit UTC dates; inference uses those dates directly,
+with the FITS reference date as a fallback, independently of a version flag.
+FITS exports retain both in `SPINNME MODEL_TIME` and `SPINNME GEOMETRY_TIME`.
+Changing model time leaves the observing geometry date intact. Legacy Hinode
+polarization still needs fresh training to correct the inferred physical field.

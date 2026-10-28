@@ -4,100 +4,100 @@ data:
   train_configs:
   - type: hinode
     data_path: null
-    data_hdu: 0
-    axis_order: [stokes, wavelength, y, x]
-    stokes_order: IQUV
     wavelength_center: 6301.5012
-    wavelength_grid: null
-    wavelength_unit: Angstrom
-    wavelength_grid_is_offsets: true
     stokes_normalization: 1.0
     instrument_id: HINODE_6301
     line_id: fe-i-6301
     time_reference: observation
-    time_hdu: TIME_OFFSETS
-    wavelength_range: [null, 6301.99715]
+    wavelength_range: [6301.2012, 6301.8012]
   - type: hinode
     data_path: null
-    data_hdu: 0
-    axis_order: [stokes, wavelength, y, x]
-    stokes_order: IQUV
     wavelength_center: 6302.4931
-    wavelength_grid: null
-    wavelength_unit: Angstrom
-    wavelength_grid_is_offsets: true
     stokes_normalization: 1.0
     instrument_id: HINODE_6302
     line_id: fe-i-6302
     time_reference: observation
-    time_hdu: TIME_OFFSETS
-    wavelength_range: [6301.99715, null]
-  num_workers: 0
+    wavelength_range: [6302.1931, 6302.7931]
+  num_workers: 4
   num_dataset_workers: 16
-  batch_size: 4096
+  batch_size: 8192
   dataset_batch_size: 512
-  seconds_per_dt: 3600
+  seconds_per_dt: 36000
   gauss_per_dB: 1000
   valid_config:
-    type: hinode
+  - type: hinode
     data_path: null
-    data_hdu: 0
-    axis_order: [stokes, wavelength, y, x]
-    stokes_order: IQUV
     wavelength_center: 6302.4931
-    wavelength_grid: null
-    wavelength_unit: Angstrom
-    wavelength_grid_is_offsets: true
     stokes_normalization: 1.0
     instrument_id: HINODE_6302
     line_id: fe-i-6302
     time_reference: observation
-    time_hdu: TIME_OFFSETS
-    wavelength_range: [6301.99715, null]
+    wavelength_range: [6302.1931, 6302.7931]
+    sample_idx: 0
+  - type: hinode
+    data_path: null
+    wavelength_center: 6301.5012
+    stokes_normalization: 1.0
+    instrument_id: HINODE_6301
+    line_id: fe-i-6301
+    time_reference: observation
+    wavelength_range: [6301.2012, 6301.8012]
     sample_idx: 0
   ref_time: null
 instrument:
-- type: generic
+- type: hinode
   instrument_id: HINODE_6301
   limb_correction: false
   velocity_correction: false
   artifact_correction: false
   line_id: fe-i-6301
-- type: generic
+  spectral_response:
+    type: gaussian
+    fwhm: 0.0248
+    unit: Angstrom
+    samples: 9
+- type: hinode
   instrument_id: HINODE_6302
   limb_correction: false
   velocity_correction: false
   artifact_correction: false
   line_id: fe-i-6302
+  spectral_response:
+    type: gaussian
+    fwhm: 0.0248
+    unit: Angstrom
+    samples: 9
 model:
   type: mlp
-  dim: 128
-  n_layers: 4
+  dim: 512
+  n_layers: 8
   vector_potential: false
+  source_function: ratio
   activation: swish
   encoding_config:
-    type: fourier
-    num_frequencies: [8, 8, 8, 4]
-    max_frequencies: [64, 64, 64, 4]
-  b_sinh_scale: 10
-  v_sinh_scale: 1
+    type: positional_isotropic
+    num_frequencies: [256, 32]
+    min_frequencies: [0, 0]
+    max_frequencies: [12, 4]
+    include_input: false
 training:
   plot_validation: true
   epochs: -1
-  max_steps: 10000
+  max_steps: 200000
   check_val_every_n_epoch: null
-  val_check_interval: 1000
+  val_check_interval: 2000
   lr_params:
     start: 0.001
     end: 0.0001
-    iterations: 10000
+    iterations: 200000
   optimizer_config:
     type: soap
+  compile_config:
+    me_solver: true
+    mode: default
 normalization:
-  asinh_alphas:
-    Q: 0.01
-    U: 0.01
-    V: 0.01
+  asinh_alphas: null
+  stokes_scales: {I: 1.0, Q: 0.1, U: 0.1, V: 0.1}
 stokes_loss:
   type: mse
   continuum_normalization: true

@@ -24,7 +24,7 @@ class FourierEncoding(nn.Module):
         if num_frequencies is None:
             num_frequencies = [*([64] * (in_dim - 1)), 8] if in_dim == 4 else 64
         if max_frequencies is None:
-            max_frequencies = [*([2048] * (in_dim - 1)), 2] if in_dim == 4 else 2048
+            max_frequencies = [*([4096] * (in_dim - 1)), 2] if in_dim == 4 else 4096
 
         counts = _per_dimension(num_frequencies, in_dim, 'num_frequencies', int)
         maxima = _per_dimension(max_frequencies, in_dim, 'max_frequencies', float)
@@ -105,12 +105,14 @@ class IsotropicPositionalEncoding(nn.Module):
     """
 
     def __init__(self, in_dim, num_frequencies=32, min_frequencies=0,
-                 max_frequencies=6, spatial_dim=3, include_input=False, seed=None):
+                 max_frequencies=None, spatial_dim=3, include_input=False, seed=None):
         super().__init__()
         if not isinstance(spatial_dim, int) or not 1 <= spatial_dim <= in_dim:
             raise ValueError('spatial_dim must be an integer between 1 and in_dim.')
         n_other = in_dim - spatial_dim
         n_blocks = 1 + n_other
+        if max_frequencies is None:
+            max_frequencies = [12, *([6] * n_other)]
         counts = _per_dimension(num_frequencies, n_blocks, 'num_frequencies', int)
         minima = _per_dimension(min_frequencies, n_blocks, 'min_frequencies', float)
         maxima = _per_dimension(max_frequencies, n_blocks, 'max_frequencies', float)

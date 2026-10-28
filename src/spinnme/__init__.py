@@ -9,11 +9,18 @@ def load(path, *, device=None):
     return Snapshot(path, device=device)
 
 
-def run(config, **kwargs):
-    """Run a spherical inversion from a configuration mapping or YAML path."""
+def run(config, *, resume=False, profile=False, reload=False):
+    """Train from a full configuration dictionary, YAML path or bundled preset.
+
+    Dictionary inputs are copied and validated without writing an input YAML.
+    All scientific and training settings belong in ``config``. The runner saves
+    the resolved settings with the results for provenance and explicit resume.
+    Returns ``(module, data_module, trainer)``. ``reload=True`` rebuilds prepared
+    data; ``profile=True`` enables diagnostics.
+    """
     from .configuration import resolve_config
     from .training.runner import run as run_inversion
-    return run_inversion(resolve_config(config), **kwargs)
+    return run_inversion(resolve_config(config), resume=resume, profile=profile, reload=reload)
 
 
 __all__ = ["__version__", "load", "run"]

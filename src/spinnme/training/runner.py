@@ -18,6 +18,7 @@ from pytorch_lightning.strategies import DDPStrategy
 from pytorch_lightning.utilities import rank_zero_only
 
 from spinnme.data.cache import load_or_prepare_data_module
+from spinnme.distributed import is_primary_process
 from spinnme.train.me_spherical_module import MESphericalModule
 from spinnme.train.physics_regularization import build_spherical_collocation_domain, split_stokes_and_physics_config
 
@@ -55,6 +56,8 @@ def _logger(configuration, directory):
 
 @rank_zero_only
 def _write_manifest(path, manifest):
+    if not is_primary_process():
+        return
     temporary = path.with_suffix('.json.tmp')
     temporary.write_text(json.dumps(manifest, indent=2, default=str, allow_nan=False))
     temporary.replace(path)
@@ -91,6 +94,9 @@ def _resume_configuration(config, resolved_path):
     def scientific(configuration):
         selected = {key: copy.deepcopy(configuration.get(key)) for key in
                     ('data', 'instrument', 'model', 'normalization', 'stokes_loss', 'weights', 'physics')}
+        # Diagnostic selections do not alter the fitted model or training loss.
+        if selected['data'] is not None:
+            selected['data'].pop('valid_config', None)
         runtime = TRAINER_OPTIONS | {'epochs', 'max_steps', 'compile_config', 'plot_validation', 'metric_log_interval'}
         selected['training'] = {key: value for key, value in configuration.get('training', {}).items()
                                 if key not in runtime}
@@ -117,6 +123,7 @@ def run(config, resume=False, profile=False, reload=False):
     from spinnme.configuration import config_hash, training_budget, write_config
     from spinnme.snapshots import save_snapshot
 
+    primary = is_primary_process()
     config = copy.deepcopy(config)
     output = Path(config.get('path', config.get('output', 'results'))).expanduser()
     work = Path(config.get('work_path', output / 'cache')).expanduser()
@@ -141,19 +148,20 @@ def run(config, resume=False, profile=False, reload=False):
                 'started_utc': datetime.now(UTC).isoformat(),
                 'config_hash': config_hash(config),
                 'budget': {'epochs': epochs, 'max_steps': max_steps}, 'resume': bool(resume),
-                'environment': _environment(), 'inputs': []}
+                'environment': _environment() if primary else None, 'inputs': []}
     _write_manifest(manifest_path, manifest)
-    if rank_zero_only.rank == 0:
+    if primary:
         write_config(config, output / 'resolved.yaml')
     try:
-        logger = _logger(config.get('logging'), work)
+        logger = _logger(config.get('logging'), work) if primary else False
         if logger:
             logger.log_hyperparams(config)
         data_module = load_or_prepare_data_module(copy.deepcopy(config['data']), work_directory=str(work), reload=reload)
         manifest['preparation'] = {'cache_signature': getattr(data_module, 'cache_signature', None),
                                    'cache_reused': getattr(data_module, 'cache_reused', False),
                                    'cache_manifest': str(getattr(data_module, 'cache_manifest', ''))}
-        manifest['inputs'] = _input_inventory(data_module)
+        if primary:
+            manifest['inputs'] = _input_inventory(data_module)
         manifest['status'] = 'training'
         _write_manifest(manifest_path, manifest)
         trainer_options = {key: training.pop(key) for key in list(training) if key in TRAINER_OPTIONS}

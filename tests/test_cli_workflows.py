@@ -15,8 +15,9 @@ def test_transmission_download_is_independent_of_run_configuration(tmp_path, mon
     def unexpected(*args, **kwargs):
         pytest.fail('Transmission download must not prepare training data or start training.')
     monkeypatch.setattr('spinnme.data.hmi_transmission.prepare_hmi_transmission_directory', download)
-    monkeypatch.setattr('spinnme.data.cache.load_or_prepare_data_module', unexpected)
+    # Import the runner before replacing its imported cache function.
     monkeypatch.setattr('spinnme.training.runner.run', unexpected)
+    monkeypatch.setattr('spinnme.data.cache.load_or_prepare_data_module', unexpected)
     assert main(['download', 'hmi-transmission', '--input', 'data90', 'data720',
                  '--output', str(tmp_path/'transmission'), '--email', 'user@example.org']) == 0
     assert calls == [(['data90', 'data720'], str(tmp_path/'transmission'),

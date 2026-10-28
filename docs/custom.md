@@ -42,7 +42,7 @@ data:
     sample_idx: 0
   batch_size: 4096
   dataset_batch_size: 512
-  num_workers: 0
+  num_workers: 4
   num_dataset_workers: 1
   seconds_per_dt: 3600
   gauss_per_dB: 1000
@@ -85,7 +85,7 @@ Use `spatial_header_hdu` when the spatial WCS is in another HDU. `spatial_wcs_ax
 
 ## Add a spectral response
 
-Instrument entries without `spectral_response` use monochromatic sampling. The bundled [PHI presets](phi.md#set-wavelengths-continuum-and-time) explicitly configure a nominal Airy response. A finite Gaussian response can be added to a generic instrument entry:
+Instrument entries without `spectral_response` use monochromatic sampling. The bundled [PHI presets](phi.md#set-wavelengths-continuum-and-time) configure a nominal Airy response, and the [Hinode preset](hinode.md#instrumental-spectral-response) configures a 24.8 mÅ Gaussian response. A finite Gaussian response can be added to a generic instrument entry:
 
 ```yaml
 instrument:

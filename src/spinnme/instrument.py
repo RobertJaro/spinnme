@@ -26,12 +26,18 @@ def hmi_wavelength_config():
     }
 
 
-# Rest wavelengths and atomic constants use the same Fe I convention as the
-# existing scientific solver. Sampling and spectral response remain observations.
+# Air rest wavelengths; sampling and spectral response remain observations.
+# Hinode transitions are z5P2 -> e5D2 (6301) and z5P1 -> e5D0 (6302),
+# with lower/upper levels as tabulated in Okunev (2004), Table 4.1:
+# https://ediss.uni-goettingen.de/bitstream/11858/00-1735-0000-0006-B4F7-D/1/okunev.pdf
+# 6301 uses LS-coupling g factors (11/6, 3/2). For 6302 retain the
+# adopted g_eff=2.49 convention (rather than the pure-LS value 2.50), see
+# https://science-media.org/userfiles/10/papers/10_paper_930.pdf, Table 2.3.
+# Its J=0 upper level is unsplit, so g_eff belongs to the lower J=1 level.
 SPECTRAL_LINES = {
     'fe-i-6173': {'wavelength_center': 6173.3433 * u.AA, 'j_up': 1., 'j_low': 0., 'g_up': 2.50, 'g_low': 0.},
     'fe-i-6301': {'wavelength_center': 6301.5012 * u.AA, 'j_up': 2., 'j_low': 2., 'g_up': 1.50, 'g_low': 1.8333333333333333},
-    'fe-i-6302': {'wavelength_center': 6302.4931 * u.AA, 'j_up': 1., 'j_low': 0., 'g_up': 2.49, 'g_low': 0.},
+    'fe-i-6302': {'wavelength_center': 6302.4931 * u.AA, 'j_up': 0., 'j_low': 1., 'g_up': 0., 'g_low': 2.49},
 }
 
 

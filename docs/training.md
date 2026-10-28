@@ -18,7 +18,7 @@ spinnme run --config inversion.yaml --data_path ./data/hmi \
 
 Copying preserves `<<KEY>>` placeholders. Supply every remaining key as `--KEY VALUE`, or replace it with a concrete YAML value. `--run_path` defaults `work_path` to its `cache/` subdirectory. Validation checks structure without filling inputs or opening files. A YAML with concrete paths can instead run with just `--config inversion.yaml`; see [named values](configuration.md#overwrite-named-values).
 
-`run` builds or reuses data caches automatically. It detects an available GPU accelerator and falls back to CPU. `--device cpu` optionally forces CPU execution. HMI transmission profiles must already be downloaded; Hinode slit assembly is a separate preprocessing operation. The instrument guides show these steps.
+`run` builds or reuses data caches automatically. It detects an available GPU accelerator and falls back to CPU. `--device cpu` optionally forces CPU execution. HMI transmission profiles must already be downloaded; Hinode slit folders are loaded and assembled automatically during inversion. The instrument guides show these steps.
 
 To inspect and cache observations before a long run, optionally use `spinnme prep --config inversion.yaml --data_path ./data/hmi --run_path ./runs/my-inversion`. This writes `preparation.json`; it does not download files, modify the YAML or set up a new training config. Run the same `inversion.yaml` afterward.
 
@@ -28,9 +28,9 @@ Each training batch samples observed profiles, evaluates the shared magnetic and
 
 The console reports preparation, the selected device and training progress. Enable [Weights & Biases](#weights--biases) to inspect training and validation curves. Important metrics include `train.stokes_loss`, the I/Q/U/V component losses, and `valid.objective`.
 
-Validation evaluates the single observation selected by `data.valid_config`. When that observation also appears in training, its loss measures the fit to training data. For an independent check, [exclude it from training](training_options.md#choose-a-validation-observation-or-holdout).
+Validation evaluates the observations selected by `data.valid_config`, which accepts one dataset mapping or a list. When an observation also appears in training, its loss measures the fit to training data. For an independent check, [exclude it from training](training_options.md#choose-a-validation-observation-or-holdout).
 
-For a practical procedure, follow [check the Stokes fit](evaluation.md#check-the-stokes-fit-before-comparing-maps). Validation metrics and images use the configured continuum normalization and asinh/linear transformation; they are not automatically reduced chi-squared or physical field errors. The bundled Hinode validation covers 6302, so assess 6301 separately too.
+For a practical procedure, follow [check the Stokes fit](evaluation.md#check-the-stokes-fit-before-comparing-maps). Validation metrics and images use the configured continuum normalization and asinh/linear transformation; they are not automatically reduced chi-squared or physical field errors. The bundled Hinode validation covers both 6301 and 6302 Å; the Stokes profile comparison shows each line in its own wavelength panels.
 
 Set `training.val_check_interval` in your YAML to control validation frequency. For a short trial, edit the training budget and validation interval before running into a fresh output directory; see [training options](training_options.md).
 

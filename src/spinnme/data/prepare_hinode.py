@@ -5,6 +5,7 @@ incomplete Level-1 metadata. Supply the validated raster header explicitly.
 """
 from pathlib import Path
 
+
 import numpy as np
 from astropy import units as u
 from astropy.io import fits

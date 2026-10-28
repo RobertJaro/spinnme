@@ -2,7 +2,7 @@
 
 For an online walkthrough, use the [Colab notebooks](colab/README.md): circular pattern, HMI, Hinode SP, PHI and custom FITS, each with basic evaluation and exports.
 
-[Run hmi.sh](hmi.sh) for the four-step HMI workflow. Set `JSOC_EMAIL` first. Use [hmi_subframe.sh](hmi_subframe.sh) to crop and invert an HMI region. Use [hinode.sh](hinode.sh) for a prepared two-line raster or [phi_hrt.sh](phi_hrt.sh) for PHI downloads, training and exports.
+[Run hmi.sh](hmi.sh) for the four-step HMI workflow. Set `JSOC_EMAIL` first. Use [hmi_subframe.sh](hmi_subframe.sh) to crop and invert an HMI region. Use [hinode.sh](hinode.sh) to download and invert calibrated slit scans or [phi_hrt.sh](phi_hrt.sh) for PHI downloads, training and exports.
 
 All run configurations are installed with the package; use `spinnme config list`
 from any directory. See the linked public guides for calibration and FITS details.
@@ -12,7 +12,7 @@ from any directory. See the linked public guides for calibration and FITS detail
 | HMI cropped Stokes | `hmi/subframe` | [Subframe workflow](../docs/hmi.md#invert-an-hmi-subframe) |
 | HMI full-disk Stokes | `hmi/full_disk` | [Quickstart](../docs/quickstart.md), [HMI](../docs/hmi.md) |
 | Offline circular pattern | `synthetic/circular` | [Circular example](../docs/circular.md) |
-| Prepared Hinode/SP raster (6301 + 6302 Å) | `hinode/sp` | [Hinode](../docs/hinode.md) |
+| Hinode/SP slit folder (6301 + 6302 Å) | `hinode/sp` | [Hinode](../docs/hinode.md) |
 | PHI-HRT or PHI-FDT | `phi/hrt`, `phi/fdt` | [PHI](../docs/phi.md) |
 | Custom Stokes cube | `generic/stokes_cube` | [Custom data](../docs/custom.md) |
 | Two lines with different sampling | `generic/multiple_lines` | [Instrument setup](../docs/custom.md) |

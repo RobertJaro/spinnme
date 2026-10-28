@@ -120,7 +120,7 @@ def image_to_spherical_matrix(lon, lat, lonc, latc, pAng, observer_distance=None
         image_x = np.stack([ray[..., 2], np.zeros_like(ray[..., 0]), -ray[..., 0]], axis=-1)
         image_x /= np.linalg.norm(image_x, axis=-1, keepdims=True)
         image_y = np.cross(ray, image_x)
-        cos_p, sin_p = np.cos(pAng), np.sin(pAng)
+        cos_p, sin_p = np.cos(pAng)[..., None], np.sin(pAng)[..., None]
         rolled_x = cos_p * image_x - sin_p * image_y
         rolled_y = sin_p * image_x + cos_p * image_y
         basis = np.stack([rolled_x, rolled_y, ray], axis=-1)

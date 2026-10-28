@@ -116,8 +116,9 @@ def test_minimal_pixel_cache_reconstructs_original_samples(tmp_path, filter_nans
         ref_time=map_data['time'], stokes_normalization=1., work_directory=str(tmp_path),
         batch_size=8, shuffle=shuffle, filter_nans=filter_nans,
     )
-    expected_keys = {'stokes', 'pixel_index'} if filter_nans or shuffle else {'stokes'}
-    assert set(dataset.data) == expected_keys
+    # This map includes off-disk pixels: their exclusion requires a selector
+    # even when NaN filtering and shuffling are disabled.
+    assert set(dataset.data) == {'stokes', 'pixel_index'}
     assert not hasattr(dataset, 'v_obs_los')
     batches = [dataset[i] for i in range(len(dataset))]
     stokes_out = np.concatenate([b['stokes'].numpy() for b in batches])

@@ -16,6 +16,7 @@ from torch import nn
 from torch.optim.lr_scheduler import LambdaLR
 
 from spinnme.instrument import resolve_instrument_line
+from spinnme.conventions import COORDINATE_CONVENTION_VERSION
 from spinnme.model import (
     LimbCorrectionModel,
     MESphericalModel,
@@ -24,7 +25,7 @@ from spinnme.model import (
     VelocityCorrectionModel,
 )
 from spinnme.train.artifact_correction import ArtifactCorrectionModule
-from spinnme.train.me_atmosphere import HMIMEAtmosphere, MEAtmosphere, PHIMEAtmosphere
+from spinnme.train.me_atmosphere import HMIMEAtmosphere, HinodeMEAtmosphere, MEAtmosphere, PHIMEAtmosphere
 from spinnme.train.metrics import TrainingMetricWindow
 from spinnme.train.numerics import write_numerical_report
 from spinnme.train.physics import PhysicsWeightSchedule
@@ -56,8 +57,12 @@ class MESphericalModule(LightningModule):
                  time_shift_config=None,
                  weights_config=None, optimizer_config=None, instrument_weights=None, wavelength_reduction="sum",
                  replay_config=None, metric_log_interval=50, plot_validation=True,
-                 compile_config=None):
+                 compile_config=None,
+                 coordinate_convention_version=COORDINATE_CONVENTION_VERSION):
         super().__init__()
+        if coordinate_convention_version not in (1, COORDINATE_CONVENTION_VERSION):
+            raise ValueError('Unsupported coordinate convention version.')
+        self.coordinate_convention_version = coordinate_convention_version
         for name, scale in (('gauss_per_dB', gauss_per_dB), ('Rs_per_ds', Rs_per_ds),
                             ('seconds_per_dt', seconds_per_dt)):
             if isinstance(scale, bool) or not np.isfinite(scale) or scale <= 0:
@@ -72,6 +77,7 @@ class MESphericalModule(LightningModule):
             'optimizer_config': optimizer_config, 'instrument_weights': instrument_weights,
             'wavelength_reduction': wavelength_reduction, 'metric_log_interval': metric_log_interval,
             'compile_config': compile_config, 'plot_validation': plot_validation,
+            'coordinate_convention_version': coordinate_convention_version,
         })
         if replay_config is not None:
             raise ValueError('Replay sampling was removed; use opt-in polarization oversampling instead.')
@@ -171,6 +177,9 @@ class MESphericalModule(LightningModule):
                 hmi_instrument_ids.append(instrument_id)
             elif instrument_type == 'phi':
                 forward_models[instrument_id] = PHIMEAtmosphere(wavelength_center=wavelength_center, **instrument)
+            elif instrument_type == 'hinode' and coordinate_convention_version >= 2:
+                forward_models[instrument_id] = HinodeMEAtmosphere(wavelength_center=wavelength_center,
+                    **self.line_atomic_parameters[line_id], **instrument)
             elif instrument_type in ('generic', 'me', 'hinode'):
                 forward_models[instrument_id] = MEAtmosphere(wavelength_center=wavelength_center,
                     **self.line_atomic_parameters[line_id], **instrument)
@@ -447,6 +456,8 @@ class MESphericalModule(LightningModule):
                 key: value[current_idx:current_idx + n_samples]
                 for key, value in forward_params.items()
             }
+            if 'image_p_angle' in batch[instrument_id]:
+                ds_forward_params['image_p_angle'] = batch[instrument_id]['image_p_angle']
             if getattr(self.parameter_model, 'line_heads', None):
                 line_output = self.parameter_model(
                     coords[current_idx:current_idx + n_samples], instrument_id=instrument_id)
@@ -597,6 +608,8 @@ class MESphericalModule(LightningModule):
         transformed_output = self.transform_parameters(output, coords,
                                                        cartesian_to_spherical_transform, rtp_to_img_transform)
         forward_params = self.scale_parameters(output, transformed_output, v_obs_los)
+        if 'image_p_angle' in batch:
+            forward_params['image_p_angle'] = batch['image_p_angle']
 
         if instrument_id in self.limb_correction_models:
             limb_correction = self.limb_correction_models[instrument_id](mu)
@@ -668,6 +681,8 @@ class MESphericalModule(LightningModule):
             res['artifact_correction_params'] = artifact_correction['correction_params']
             res['artifact_gate'] = artifact_correction['correction_gate']
 
+        if 'pixel_index' in batch:
+            res['pixel_index'] = batch['pixel_index'].long()
         res["lin_idx"] = batch["lin_idx"].long()  # for assembling full images later
 
         return res
@@ -680,6 +695,10 @@ class MESphericalModule(LightningModule):
         if outputs is not None:
             # ensure CPU to keep GPU mem low
             cpu_out = {k: v.detach().cpu() for k, v in outputs.items()}
+            cpu_out['_validation_index'] = int(batch.get('validation_index', torch.tensor([dataloader_idx])).reshape(-1)[0])
+            cpu_out['_instrument_id'] = batch['instrument_id']
+            cpu_out['_image_shape'] = tuple(batch['image_shape'].tolist()) if 'image_shape' in batch else self.image_shape
+            cpu_out['_wavelength_grid'] = batch['wavelength_grid'][0].detach().cpu().numpy()
             self.val_outputs.append(cpu_out)
 
     def on_validation_epoch_end(self):
@@ -699,7 +718,43 @@ class MESphericalModule(LightningModule):
                 dist.gather_object(outputs_list, None, dst=0)
                 return
 
-        # Each batch covers a contiguous native-image slice. DDP may repeat it.
+        groups = {}
+        for output in outputs_list:
+            groups.setdefault(output.get('_validation_index', 0), []).append(output)
+        profiles = []
+        self._shared_validation_maps_plotted = False
+        for index, group in sorted(groups.items()):
+            instrument = group[0].get('_instrument_id')
+            shape = group[0].get('_image_shape', self.image_shape)
+            suffix = f' ({instrument})' if len(groups) > 1 else ''
+            self._validation_image_suffix = suffix
+            try:
+                prefix = 'valid' if index == 0 else f'valid.{instrument}'
+                profile = self._finish_validation_group(group, shape, prefix)
+            finally:
+                self._validation_image_suffix = ''
+            if profile is not None:
+                prediction, truth = profile
+                wavelength = group[0].get('_wavelength_grid')
+                if instrument is not None and wavelength is not None:
+                    wavelength = (np.asarray(wavelength, dtype=np.float64) +
+                                  self.wavelength_config[instrument]['wavelength_center'].to_value(u.m))*1e10
+                profiles.append((prediction, truth, instrument, wavelength))
+        if profiles:
+            if len(profiles) == 1:
+                prediction, truth, instrument, wavelength = profiles[0]
+                if instrument is None and wavelength is None:
+                    self.plot_profile(prediction, truth)
+                else:
+                    self.plot_profile(prediction, truth, instrument_id=instrument, wavelengths=wavelength)
+            else:
+                # Present line windows in physical wavelength order.
+                profiles.sort(key=lambda entry: self.wavelength_config[entry[2]]['wavelength_center'].to_value(u.m))
+                self.plot_profile(profiles[0][0], profiles[0][1], instrument_id=profiles[0][2],
+                                  wavelengths=profiles[0][3], additional_profiles=profiles[1:])
+
+    def _finish_validation_group(self, outputs_list, image_shape, metric_prefix):
+        # Each batch covers a storage slice. DDP may repeat it.
         batches = {}
         for output in outputs_list:
             index = int(output['lin_idx'].reshape(-1)[0])
@@ -707,8 +762,13 @@ class MESphericalModule(LightningModule):
         outputs_list = [batches[index] for index in sorted(batches)]
 
         outputs = {}
-        for k in outputs_list[0]:
+        for k in (key for key in outputs_list[0] if not key.startswith('_')):
             outputs[k] = torch.cat([o[k] for o in outputs_list], dim=0)
+
+        if 'pixel_index' in outputs:
+            native_order = torch.argsort(outputs.pop('pixel_index').reshape(-1))
+            outputs = {key: value[native_order] if key != 'lin_idx' else value
+                       for key, value in outputs.items()}
 
         I_diff, Q_diff, U_diff, V_diff = torch.nanmean(outputs['diff'], dim=(0, 2))
         objective_valid = outputs['objective_valid'].bool()
@@ -723,7 +783,8 @@ class MESphericalModule(LightningModule):
             objective_total = torch.tensor(torch.nan, dtype=outputs['objective'].dtype)
 
         image_logger = self._validation_image_logger()
-        full_image = outputs['diff'].shape[0] == int(np.prod(self.image_shape[:2]))
+        full_image = outputs['diff'].shape[0] == int(np.prod(image_shape[:2]))
+        profile = None
         if image_logger is not None and full_image and torch.any(objective_valid):
             parameters = {}
             for k in ['b_field', 'inc', 'azi', 'vmac', 'damping', 'b0', 'b1', 'vdop', 'kl',
@@ -733,24 +794,32 @@ class MESphericalModule(LightningModule):
                       'limb_filling_factor']:
                 if k not in outputs:
                     continue
-                v = outputs[k].reshape(*self.image_shape[:2], -1).numpy()
+                v = outputs[k].reshape(*image_shape[:2], -1).numpy()
                 parameters[k] = v[..., 0] if v.shape[-1] == 1 else v
             self.plot_parameter_overview(parameters)
-            self.plot_B_rtp_log(parameters)
-            self.plot_B_rtp(parameters)
-            self.plot_v_rtp(parameters)
+            if not self._shared_validation_maps_plotted:
+                # B and v belong to the shared atmosphere, rather than a line.
+                suffix = self._validation_image_suffix
+                self._validation_image_suffix = ''
+                try:
+                    self.plot_B_rtp_log(parameters)
+                    self.plot_B_rtp(parameters)
+                    self.plot_v_rtp(parameters)
+                finally:
+                    self._validation_image_suffix = suffix
+                self._shared_validation_maps_plotted = True
             # self.plot_physics_losses(parameters)
             self.plot_limb_correction(parameters)
 
             if 'artifact_correction_params' in outputs:
-                artifact_params = outputs['artifact_correction_params'].reshape(*self.image_shape[:2], -1).cpu().numpy()
+                artifact_params = outputs['artifact_correction_params'].reshape(*image_shape[:2], -1).cpu().numpy()
                 self.plot_artifact_corrections(artifact_params)
 
-            stokes_true = outputs['stokes_true'].cpu().numpy().reshape(*self.image_shape[:2], 4, -1)
-            stokes_pred = outputs['stokes_pred'].cpu().numpy().reshape(*self.image_shape[:2], 4, -1)
+            stokes_true = outputs['stokes_true'].cpu().numpy().reshape(*image_shape[:2], 4, -1)
+            stokes_pred = outputs['stokes_pred'].cpu().numpy().reshape(*image_shape[:2], 4, -1)
 
             self.plot_stokes(stokes_pred, stokes_true)
-            self.plot_profile(stokes_pred, stokes_true)
+            profile = stokes_pred, stokes_true
 
         validation_metrics = {
             # log total stokes loss
@@ -765,7 +834,9 @@ class MESphericalModule(LightningModule):
             # 'valid.divergence': torch.nanmean(outputs['divergence']),
             # 'valid.force_free': torch.nanmean(outputs['force_free']),
         }
-        self.log_dict(validation_metrics)
+        self.log_dict({key.replace('valid.', metric_prefix+'.', 1): value
+                       for key, value in validation_metrics.items()})
+        return profile
 
     def _validation_image_logger(self):
         if not self.plot_validation or self._trainer is None or self.trainer.sanity_checking:
@@ -775,6 +846,7 @@ class MESphericalModule(LightningModule):
     def _log_validation_image(self, figure, name):
         logger = self._validation_image_logger()
         if logger is not None:
+            name += getattr(self, '_validation_image_suffix', '')
             log_wandb_image(figure, name, logger=logger, step=int(self.global_step))
 
     def plot_physics_losses(self, parameters):
@@ -894,46 +966,55 @@ class MESphericalModule(LightningModule):
         self._log_validation_image(fig, "Limb Correction Factors")
         plt.close(fig)
 
-    def plot_profile(self, stokes_pred, stokes_true):
-        """Spatial mean/std and GT polarization extrema in loss-transformed units."""
-        valid = (np.isfinite(stokes_true).all(axis=(-2, -1))
-                 & np.isfinite(stokes_pred).all(axis=(-2, -1)))
-        positions = np.argwhere(valid)
-        if not len(positions):
+    def plot_profile(self, stokes_pred, stokes_true, *, instrument_id=None,
+                     wavelengths=None, additional_profiles=()):
+        """Compare every validation line without joining disjoint spectral windows."""
+        profiles = [(stokes_pred, stokes_true, instrument_id, wavelengths), *additional_profiles]
+        selections = []
+        for prediction, truth, instrument, wavelength in profiles:
+            valid = np.isfinite(truth).all(axis=(-2, -1)) & np.isfinite(prediction).all(axis=(-2, -1))
+            positions = np.argwhere(valid)
+            if len(positions):
+                selections.append((prediction, truth, instrument, wavelength, valid, positions))
+        if not selections:
             return
-        true_profiles = stokes_true[valid]
-        pred_profiles = stokes_pred[valid]
-        # One joint Q/U/V score selects the same native pixel for all four rows.
-        polarization = np.sqrt(np.mean(np.square(true_profiles[:, 1:].astype(np.float64)), axis=(1, 2)))
-        extrema = [positions[np.argmax(polarization)], positions[np.argmin(polarization)]]
-        samples = np.arange(stokes_true.shape[-1])
-        fig, axes = plt.subplots(4, 3, figsize=(13, 9), sharex=True, squeeze=False)
-        for row, label in enumerate('IQUV'):
-            ax = axes[row, 0]
-            for profiles, color, shade, name in (
-                    (true_profiles, 'black', 'gray', 'GT'),
-                    (pred_profiles, 'tab:orange', 'tab:orange', 'SPINNME')):
-                mean = profiles[:, row].mean(axis=0)
-                std = profiles[:, row].std(axis=0)
-                ax.fill_between(samples, mean - std, mean + std, color=shade, alpha=0.2)
-                ax.plot(samples, mean, color=color, label=name, linewidth=1.6)
-            for column, (y, x) in enumerate(extrema, start=1):
-                ax = axes[row, column]
-                ax.plot(samples, stokes_true[y, x, row], '.-', color='black', label='GT')
-                ax.plot(samples, stokes_pred[y, x, row], '-', color='tab:orange', label='SPINNME')
-            for ax in axes[row]:
-                ax.set_ylabel(label)
-                ax.grid(alpha=0.2)
-                ax.spines[['top', 'right']].set_visible(False)
-                if row == 3:
-                    ax.set_xlabel('Wavelength sample')
-        axes[0, 0].set_title(f'Mean ± 1 std ({len(positions)} pixels)')
-        axes[0, 0].legend(frameon=False)
-        for column, ((y, x), title) in enumerate(zip(extrema, ('Strongest polarization', 'Minimum polarization')), start=1):
-            axes[0, column].set_title(f'{title}\nx={x}, y={y}')
+        fig, axes = plt.subplots(4, 3*len(selections), figsize=(13*len(selections), 9),
+                                 sharex='col', squeeze=False)
+        for block, (prediction, truth, instrument, wavelength, valid, positions) in enumerate(selections):
+            true_profiles, pred_profiles = truth[valid], prediction[valid]
+            polarization = np.sqrt(np.mean(np.square(true_profiles[:, 1:].astype(np.float64)), axis=(1, 2)))
+            extrema = [positions[np.argmax(polarization)], positions[np.argmin(polarization)]]
+            samples = np.arange(truth.shape[-1]) if wavelength is None else wavelength
+            panels = axes[:, block*3:(block+1)*3]
+            for row, label in enumerate('IQUV'):
+                ax = panels[row, 0]
+                for values, color, shade, name in (
+                        (true_profiles, 'black', 'gray', 'GT'),
+                        (pred_profiles, 'tab:orange', 'tab:orange', 'SPINNME')):
+                    mean, std = values[:, row].mean(axis=0), values[:, row].std(axis=0)
+                    ax.fill_between(samples, mean-std, mean+std, color=shade, alpha=.2)
+                    ax.plot(samples, mean, color=color, label=name, linewidth=1.6)
+                for column, (y, x) in enumerate(extrema, start=1):
+                    ax = panels[row, column]
+                    ax.plot(samples, truth[y, x, row], '.-', color='black', label='GT')
+                    ax.plot(samples, prediction[y, x, row], '-', color='tab:orange', label='SPINNME')
+                for ax in panels[row]:
+                    ax.set_ylabel(label)
+                    if wavelength is not None:
+                        ax.ticklabel_format(axis='x', style='plain', useOffset=False)
+                        ax.locator_params(axis='x', nbins=4)
+                    ax.grid(alpha=.2)
+                    ax.spines[['top', 'right']].set_visible(False)
+                    if row == 3:
+                        ax.set_xlabel('Wavelength [Å]' if wavelength is not None else 'Wavelength sample')
+            heading = f'{instrument}\n' if instrument else ''
+            panels[0, 0].set_title(f'{heading}Mean ± 1 std ({len(positions)} pixels)')
+            panels[0, 0].legend(frameon=False)
+            for column, ((y, x), title) in enumerate(zip(extrema, ('Strongest polarization', 'Minimum polarization')), start=1):
+                panels[0, column].set_title(f'{heading}{title}\nx={x}, y={y}')
         fig.suptitle('Stokes profiles - Comparison')
-        fig.tight_layout(rect=(0, 0.025, 1, 0.96))
-        fig.text(0.5, 0.01, 'Polarization: RMS of GT Q, U, V across wavelength · profiles in loss-transformed units',
+        fig.tight_layout(rect=(0, .025, 1, .96))
+        fig.text(.5, .01, 'Polarization: RMS of GT Q, U, V across wavelength · profiles in loss-transformed units',
                  ha='center', fontsize=9, color='0.35')
         self._log_validation_image(fig, 'Stokes profiles - Comparison')
         plt.close(fig)
@@ -1213,6 +1294,7 @@ class MESphericalModule(LightningModule):
         plt.close(fig)
 
     def on_save_checkpoint(self, checkpoint: dict[str, Any]) -> None:
+        checkpoint['spinnme_coordinate_convention_version'] = self.coordinate_convention_version
         checkpoint['spinnme_checkpoint_version'] = 1
         checkpoint['coordinate_order'] = 'xyzt'
         checkpoint['spinnme_wavelength_reduction'] = self.wavelength_reduction
@@ -1248,6 +1330,8 @@ class MESphericalModule(LightningModule):
         return {**config, 'asinh_alphas': [float(value) for value in values]}
 
     def on_load_checkpoint(self, checkpoint: dict[str, Any]) -> None:
+        if checkpoint.get('spinnme_coordinate_convention_version', 1) != self.coordinate_convention_version:
+            raise ValueError('Cannot resume across coordinate conventions. Rebuild data and train in a fresh path.')
         required = {
             'spinnme_checkpoint_version', 'coordinate_order', 'state_dict',
             'spinnme_wavelength_reduction', 'spinnme_instrument_weights',

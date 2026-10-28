@@ -7,6 +7,15 @@ from _training_helpers import _module, _physical_batch
 from spinnme.train.metrics import TrainingMetricWindow
 
 
+def test_default_training_objective_is_only_stokes_loss():
+    module = _module()
+    result = module.training_step(_physical_batch(), 0)
+    torch.testing.assert_close(result['loss'], result['stokes_loss'])
+    result['loss'].backward()
+    gradients = [p.grad for p in module.parameter_model.parameters() if p.grad is not None]
+    assert gradients and all(torch.isfinite(gradient).all() for gradient in gradients)
+
+
 def test_window_detaches_and_averages_in_one_collective(monkeypatch):
     import spinnme.train.metrics as metrics_module
     window = TrainingMetricWindow()

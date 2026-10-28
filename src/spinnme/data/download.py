@@ -5,13 +5,14 @@ from datetime import UTC
 def _dispatch(source, *, output, start=None, end=None, email=None, product=None,
              telescope=None, cadence="720s", series=None, segments=None,
              time_scale="utc", level="L2", urls=None):
-    """Download HMI or PHI data; importing this module is offline."""
+    """Download HMI, PHI or calibrated Hinode data; importing this module is offline."""
     source = source.lower()
     if urls:
         import shutil
         from pathlib import Path
         from urllib.parse import unquote, urlparse
         from urllib.request import urlopen
+        from tqdm.auto import tqdm
         directory = Path(output)
         directory.mkdir(parents=True, exist_ok=True)
         destinations = []
@@ -26,11 +27,14 @@ def _dispatch(source, *, output, start=None, end=None, email=None, product=None,
         if len({target.name for _,target in destinations}) != len(destinations):
             raise ValueError('Download URLs must have distinct filenames to avoid overwriting observations.')
         paths = []
-        for url, target in destinations:
+        for url, target in tqdm(destinations, desc="Downloading", unit="file"):
             temporary = target.with_suffix(target.suffix + '.partial')
             try:
                 with urlopen(url, timeout=60) as incoming, temporary.open('wb') as outgoing:
-                    shutil.copyfileobj(incoming, outgoing)
+                    size = getattr(incoming, 'headers', {}).get('Content-Length')
+                    with tqdm.wrapattr(outgoing, 'write', total=int(size) if size else None,
+                                       desc=target.name, leave=False) as progress:
+                        shutil.copyfileobj(incoming, progress)
                 temporary.replace(target)
             finally:
                 temporary.unlink(missing_ok=True)
@@ -52,8 +56,12 @@ def _dispatch(source, *, output, start=None, end=None, email=None, product=None,
         end = parse_time(end, time_scale).isoformat()
         telescope = telescope or (source.split('-')[-1] if '-' in source else 'hrt')
         return download_phi(output, start, end, telescope, products=product or ('stokes',), level=level)
-    raise ValueError('Supported download sources are hmi, phi, phi-hrt and phi-fdt. '
-                     'Obtain calibrated Hinode rasters from their archive and prepare them explicitly.')
+    if source == 'hinode':
+        if start is None or end is None:
+            raise ValueError('Hinode downloads require start and end, or explicit URLs.')
+        from .download_hinode import download_hinode
+        return download_hinode(output, start, end, time_scale=time_scale)
+    raise ValueError('Supported download sources are hmi, phi, phi-hrt, phi-fdt and hinode.')
 
 
 def download(source, *, output, start=None, end=None, email=None, product=None,
@@ -116,7 +124,7 @@ def download(source, *, output, start=None, end=None, email=None, product=None,
         raise RuntimeError('The archive returned no files; no successful download manifest was written.')
     records = []
     keys = ('INSTRUME','TELESCOP','LEVEL','VERSION','VERS_SW','VERS_CAL','PHIDATID',
-            'PHIDTYPE','T_REC','HCAMID','QUALITY','DATE-OBS','DATE-AVG','DATE-END',
+            'PHIDTYPE','T_REC','T_OBS','HCAMID','QUALITY','DATE-OBS','DATE-AVG','DATE-END',
             'DATE_EAR','DATE_SUN','WAVELNTH','WAVEUNIT','ACCRAWIT')
     for path in paths:
         if not path.is_absolute():

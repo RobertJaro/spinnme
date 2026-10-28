@@ -106,7 +106,7 @@ class EvaluationResult:
     def _fits_hdus(self, name, array):
         # Build from native spatial WCS while dropping unrelated input spectral axes.
         spatial = WCS(self.header).celestial.to_header(relax=True)
-        for key in ("DATE-OBS", "DATE-AVG", "DATE-END", "TIMESYS", "DSUN_OBS", "RSUN_REF", "RSUN_OBS", "HGLN_OBS", "HGLT_OBS", "CRLN_OBS", "CRLT_OBS", "OBS_VR", "OBS_VW", "OBS_VN", "TELESCOP", "INSTRUME", "OBSRVTRY"):
+        for key in ("DATE-OBS", "DATE-AVG", "T_OBS", "T_REC", "DATE-END", "TIMESYS", "DSUN_OBS", "RSUN_REF", "RSUN_OBS", "HGLN_OBS", "HGLT_OBS", "CRLN_OBS", "CRLT_OBS", "OBS_VR", "OBS_VW", "OBS_VN", "TELESCOP", "INSTRUME", "OBSRVTRY"):
             if key in self.header:
                 spatial[key] = self.header[key]
         spatial["BUNIT"] = self.units.get(name, "1")
@@ -114,13 +114,32 @@ class EvaluationResult:
         spatial["ORIGIN"] = "SPINNME"
         spatial["SPINNVER"] = self.metadata.get("spinnme_version", "unknown")
         spatial["HIERARCH SPINNME AMBIGUITY"] = "unresolved model azimuth branch"
+        conventions = self.metadata.get('conventions', {})
+        if 'version' in conventions:
+            spatial['HIERARCH SPINNME CONVENTIONS'] = conventions['version']
+        if name == 'azimuth':
+            spatial['HISTORY'] = conventions.get('azimuth', 'Legacy image azimuth; see provenance')
+        if "geometry_time" in self.metadata:
+            spatial["HIERARCH SPINNME GEOMETRY_TIME"] = self.metadata["geometry_time"]
         if "model_time" in self.metadata:
             spatial["HIERARCH SPINNME MODEL_TIME"] = self.metadata["model_time"]
         for key in ("Btheta", "Bphi", "B_los", "Blos", "v_los", "Vdop"):
             if name == key:
                 spatial["HISTORY"] = self.metadata.get("conventions", {}).get({"Blos": "B_los", "Vdop": "v_los"}.get(key, key), "")
+        if self.metadata.get('slit_pixel_world') is not None:
+            spatial['HIERARCH SPINNME GRID'] = 'Native slit coordinates in PROVENANCE; nominal WCS'
         data = np.asarray(array, dtype=np.float32)
         extra = []
+        if self.metadata.get('slit_pixel_world') is not None:
+            coefficients = np.asarray(self.metadata['slit_pixel_world'], dtype=float)
+            if coefficients.shape != (4, self.mask.shape[1]):
+                raise ValueError('Native slit coordinates must have shape (4,nx).')
+            rows = np.arange(self.mask.shape[0])[:, None]
+            for coordinate_name, values in (('X_COORDINATE', coefficients[0] + rows*coefficients[2]),
+                                 ('Y_COORDINATE', coefficients[1] + rows*coefficients[3])):
+                coordinate = fits.ImageHDU(values, name=coordinate_name)
+                coordinate.header['BUNIT'] = 'arcsec'
+                extra.append(coordinate)
         if data.ndim > 2:
             if name not in {'I', 'Q', 'U', 'V', 'stokes'}:
                 raise ValueError(f"{name} is a parameter vector; select scalar components (e.g. Artifact) for FITS, or export NPZ.")

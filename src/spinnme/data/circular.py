@@ -15,7 +15,7 @@ def create_circular_dataset(output, size=32, frames=2):
                    'stokes_normalization': 1., 'instrument_id': 'CIRCULAR', 'line_id': 'fe-i-6173'}
     config = {'path':'<<run_path>>', 'work_path':'<<work_path>>',
               'data':{'train_configs':[dataset], 'valid_config':{**dataset,'sample_idx':0},
-                      'ref_time':'2025-01-01T00:00:00', 'num_workers':0,'num_dataset_workers':0,
+                      'ref_time':'2025-01-01T00:00:00', 'num_workers':4,'num_dataset_workers':0,
                       'batch_size':128,'dataset_batch_size':64,'seconds_per_dt':3600,'gauss_per_dB':1000},
               'instrument':[{'type':'generic','instrument_id':'CIRCULAR','line_id':'fe-i-6173'}],
               'model':{'type':'mlp','dim':32,'n_layers':2,'vector_potential':False},

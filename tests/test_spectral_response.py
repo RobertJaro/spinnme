@@ -126,3 +126,36 @@ def test_configured_response_is_used_for_training_and_snapshot_constructor(respo
 def test_invalid_passbands_are_rejected(config):
     with pytest.raises(ValueError):
         InstrumentSpectralResponse(config)
+
+
+@pytest.mark.parametrize('line_id', ['fe-i-6301', 'fe-i-6302'])
+def test_hinode_preset_response_matches_dense_gaussian_convolution(tmp_path, line_id):
+    from spinnme.configuration import resolve_config
+    from spinnme.instrument import SPECTRAL_LINES
+    from spinnme.train.me_atmosphere import MEAtmosphere
+
+    config = resolve_config('hinode/sp', input_path='unused', output=str(tmp_path/'run'))
+    instrument = next(entry for entry in config['instrument'] if entry['line_id'] == line_id)
+    response = InstrumentSpectralResponse(instrument['spectral_response']).double()
+    atmosphere = MEAtmosphere(**SPECTRAL_LINES[line_id]).double()
+    parameters, _ = physical_inputs(8, 29, 'cpu', torch.float64)
+    parameters['vmac'] = torch.linspace(950, 3500, 8, dtype=torch.float64)[:, None].requires_grad_()
+    parameters['b_field'] = parameters['b_field'] * 2.5  # through 5 kG
+    grid = torch.linspace(-.30, .30, 29, dtype=torch.float64)[None].expand(8, -1)*1e-10
+    actual = torch.stack(atmosphere(wavelength_grid=grid, **parameters, **response(8, 29)), dim=-2)
+
+    # Independent, uniformly sampled convolution of the emergent Stokes spectra.
+    sigma = .0248e-10 / np.sqrt(8*np.log(2))
+    offsets = torch.linspace(-6*sigma, 6*sigma, 601, dtype=torch.float64)
+    weights = torch.exp(-.5*(offsets/sigma).square())
+    weights[[0, -1]] *= .5  # trapezoidal integration
+    weights /= weights.sum()
+    with torch.no_grad():
+        dense_grid = (grid[..., None] + offsets).reshape(8, -1)
+        dense = atmosphere(wavelength_grid=dense_grid, **parameters)
+        expected = torch.stack([(value.reshape(8, 29, -1)*weights).sum(-1) for value in dense], dim=-2)
+        monochromatic = torch.stack(atmosphere(wavelength_grid=grid, **parameters), dim=-2)
+    torch.testing.assert_close(actual, expected, atol=2e-6, rtol=0)
+    assert (actual-monochromatic).abs().max() > 1e-4
+    gradients = torch.autograd.grad(actual.square().sum(), tuple(parameters.values()))
+    assert all(torch.isfinite(value).all() for value in gradients)

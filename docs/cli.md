@@ -47,7 +47,7 @@ Both commands take the `.pme` snapshot as their first positional argument and re
 
 ## Download and errors
 
-HMI uses `--start`, optional `--end`, `--product`, `--time-scale utc/tai` and `--email`. `--cadence` sets archive sampling; `--segments` limits the returned segments. PHI uses `--telescope hrt/fdt` and `--product stokes`. Hinode accepts repeated `--url` arguments. See [data preparation](data.md).
+HMI uses `--start`, optional `--end`, `--product`, `--time-scale utc/tai` and `--email`. `--cadence` sets archive sampling; `--segments` limits the returned segments. PHI uses `--telescope hrt/fdt` and `--product stokes`. Hinode uses `--start`, `--end` and `--time-scale utc/tai` to download calibrated Level-1 Stokes files. Repeated `--url` arguments download explicit files. See [data preparation](data.md).
 
 Add global `--debug` before a command to show the full traceback:
 

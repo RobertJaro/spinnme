@@ -10,3 +10,9 @@ stokes_order: IQUV
 axis_order: [stokes, wavelength, y, x]
 time_hdu: TIME_OFFSETS
 time_reference: observation
+wavelength_range: [6302.1931, 6302.7931]
+spectral_response:
+  type: gaussian
+  fwhm: 0.0248
+  unit: Angstrom
+  samples: 9

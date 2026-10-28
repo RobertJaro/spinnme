@@ -145,6 +145,8 @@ def test_restore_ignores_legacy_file_inventory_and_array_checks(tmp_path):
             description.update(shape=[-1], dtype='obsolete',
                                files=[{'path': 'missing-chunk', 'bytes': 123}])
     manifest['fingerprint'] = {'obsolete': True}
+    manifest['integrity'] = {'nonexistent-file': {'size': 42, 'sha256': 'obsolete'}}
+    manifest['metadata_sha256'] = 'obsolete'
     manifest_path.write_text(json.dumps(manifest))
     cache._LOADED_MODULES.clear()
     restored = load_or_prepare_data_module(config, tmp_path/'cache')
@@ -196,5 +198,189 @@ def test_spawn_workers_prepare_and_read_same_profiles_as_serial(tmp_path):
     loader = parallel.train_dataloader()
     assert next(iter(loader))
     validation = parallel.val_dataloader()
-    torch.testing.assert_close(next(iter(validation))['stokes'], parallel.valid_dataset[0]['stokes'])
+    batch = next(iter(validation))
+    expected = torch.cat([parallel.valid_dataset[i]['stokes'] for i in range(len(parallel.valid_dataset))])
+    torch.testing.assert_close(batch['stokes'], expected[batch['pixel_index']])
     del loader, validation
+
+
+def test_worker_changes_apply_to_existing_cache_without_rebuilding(tmp_path):
+    from spinnme.data import cache
+    path, _ = cube(tmp_path)
+    config = configuration(path)
+    original = load_or_prepare_data_module(config, tmp_path/'cache')
+    stored = paths(original)
+    signature = original.cache_signature
+    config['num_workers'] = 4
+    updated = load_or_prepare_data_module(config, tmp_path/'cache')
+    assert updated is original
+    assert updated.num_workers == 4
+    assert updated.train_dataloader().num_workers == 4
+    assert updated.val_dataloader().num_workers == 4
+    cache._LOADED_MODULES.clear()
+    restored = load_or_prepare_data_module(config, tmp_path/'cache')
+    assert restored.num_workers == 4
+    assert restored.cache_signature == signature
+    assert paths(restored) == stored
+
+
+@pytest.mark.parametrize('local_rank', ['1', '2', '3'])
+def test_lightning_followers_ignore_reload_and_never_take_writer_lock(tmp_path, monkeypatch, local_rank):
+    from filelock import FileLock
+    from spinnme.data import cache
+    path, _ = cube(tmp_path)
+    config = configuration(path)
+    prepared = load_or_prepare_data_module(config, tmp_path/'cache')
+    cache._LOADED_MODULES.clear()
+    monkeypatch.delenv('RANK', raising=False)
+    monkeypatch.setenv('LOCAL_RANK', local_rank)
+    monkeypatch.setenv('SLURM_PROCID', '0')  # inherited from the launching Slurm task
+    def unexpected(*args, **kwargs):
+        pytest.fail('A follower must only reopen the prepared module, without a writer lock or preparation.')
+    with FileLock(str(tmp_path/'cache'/'preparation.lock')):
+        monkeypatch.setattr(cache, 'FileLock', unexpected)
+        monkeypatch.setattr(cache.SphericalDataModule, '__init__', unexpected)
+        monkeypatch.setattr(fits, 'open', unexpected)
+        restored = load_or_prepare_data_module(config, tmp_path/'cache', reload=True)
+    assert restored.cache_reused
+    assert paths(restored) == paths(prepared)
+    assert len(list((tmp_path/'cache').glob('data-*'))) == 1
+
+
+def test_shared_metadata_expansion_reuses_large_numeric_lists():
+    from spinnme.data.cache import _expand_metadata
+    class NumericList(list):
+        def __iter__(self):
+            pytest.fail('Reload must not recursively walk numeric profile selectors.')
+    values = NumericList(range(100000))
+    array = {'__kind__': 'array', 'dtype': 'int64', 'value': {'__shared__': 'rows'}}
+    metadata = {'signature': 'test', 'shared': {'rows': values, 'array': array},
+                'module': {'rows': {'__shared__': 'array'}},
+                'training': [{'rows': {'__shared__': 'array'}}],
+                'validation': {'rows': {'__shared__': 'array'}}}
+    expanded = _expand_metadata(metadata)
+    assert expanded['module']['rows']['value'] is values
+    assert expanded['training'][0]['rows'] is expanded['module']['rows']
+    assert expanded['validation']['rows'] is expanded['module']['rows']
+
+
+def test_large_profile_selectors_are_lazy_and_pickle_by_path(tmp_path):
+    import pickle
+    from spinnme.data.cache import _dataset_metadata, _restore_dataset
+    from spinnme.loader.spherical import SphericalDataset
+    from spinnme.train.data_loader import TensorsDataset
+    tensors = TensorsDataset({'stokes': np.zeros((100000, 4, 2), dtype=np.float32)},
+                             str(tmp_path), 512, shuffle=False)
+    dataset = SphericalDataset.__new__(SphericalDataset)
+    dataset.__dict__.update(tensors.__dict__)
+    dataset.ds_id = 'large'
+    dataset.profile_rows = np.arange(100000, dtype=np.int64)
+    dataset.profile_valid = np.ones(100000, dtype=bool)
+    metadata = _dataset_metadata(dataset, tmp_path)
+    assert len(json.dumps(metadata)) < 4096
+    restored = _restore_dataset(metadata, tmp_path)
+    assert isinstance(restored.profile_rows, np.memmap)
+    assert isinstance(restored.profile_valid, np.memmap)
+    serialized = pickle.dumps(restored)
+    assert len(serialized) < 16384  # no selector bodies copied into spawned workers
+    worker = pickle.loads(serialized)
+    assert isinstance(worker.profile_rows, np.memmap)
+    np.testing.assert_array_equal(worker.profile_rows[:8], np.arange(8))
+    assert worker.profile_valid[:8].all()
+
+
+def test_legacy_shared_matrix_rows_expand_without_leaving_references():
+    from spinnme.data.cache import _encode, _decode, _intern_metadata, _expand_metadata
+    matrix = np.arange(6000, dtype=np.float64).reshape(2, 3000)
+    metadata = {'signature': 'test', 'module': {'matrix': _encode(matrix)},
+                'training': [], 'validation': {'attributes': {}}}
+    _intern_metadata(metadata)
+    restored = _decode(_expand_metadata(metadata)['module'])
+    np.testing.assert_array_equal(restored['matrix'], matrix)
+
+
+def test_legacy_selectors_are_converted_once_before_follower_reload(tmp_path, monkeypatch):
+    from spinnme.data import cache
+    path, _ = cube(tmp_path)
+    config = configuration(path)
+    prepared = load_or_prepare_data_module(config, tmp_path/'cache')
+    manifest_path = Path(prepared.cache_manifest)
+    metadata = cache._expand_metadata(json.loads(manifest_path.read_text()))
+    metadata['coordinate_convention_version'] = 2  # Legacy selector storage, current physical geometry.
+    for key in ('prefetch_factor', 'persistent_workers', 'pin_memory'):
+        metadata['module'].pop(key, None)
+    rows = np.arange(100000, dtype=np.int64)
+    metadata['training'][0]['attributes']['profile_rows'] = cache._encode(rows)
+    metadata['training'][0]['attributes']['profile_valid'] = cache._encode(np.ones(len(rows), dtype=bool))
+    # Reproduce the existing shared JSON format, rather than preparing a new cache.
+    cache._intern_metadata(metadata)
+    manifest_path.write_text(json.dumps(metadata))
+    old_size = manifest_path.stat().st_size
+    stores = list((tmp_path/'cache').rglob('*.zarr'))
+    cache._LOADED_MODULES.clear()
+
+    def unexpected(*args, **kwargs):
+        pytest.fail('Reload must not prepare data, open FITS, or open Zarr stores.')
+
+    import zarr
+    monkeypatch.setattr(cache.SphericalDataModule, '__init__', unexpected)
+    monkeypatch.setattr(fits, 'open', unexpected)
+    monkeypatch.setattr(zarr, 'open_array', unexpected)
+    restored = load_or_prepare_data_module(config, tmp_path/'cache')
+    assert restored.cache_signature == prepared.cache_signature
+    assert isinstance(restored.train_datasets[0].profile_rows, np.memmap)
+    assert manifest_path.stat().st_size < old_size / 5
+    assert list((tmp_path/'cache').rglob('*.zarr')) == stores
+    assert paths(restored) == paths(prepared)
+
+    cache._LOADED_MODULES.clear()
+    monkeypatch.setenv('LOCAL_RANK', '1')
+    monkeypatch.setenv('SLURM_PROCID', '0')
+    monkeypatch.setattr(cache, '_write_metadata', unexpected)
+    asarray = np.asarray
+    def no_large_json_arrays(value, *args, **kwargs):
+        if isinstance(value, list) and len(value) >= 65536:
+            pytest.fail('Follower must not materialize large JSON selectors.')
+        return asarray(value, *args, **kwargs)
+    monkeypatch.setattr(np, 'asarray', no_large_json_arrays)
+    follower = load_or_prepare_data_module(config, tmp_path/'cache')
+    assert isinstance(follower.train_datasets[0].profile_rows, np.memmap)
+    np.testing.assert_array_equal(follower.train_datasets[0].profile_rows[:8], rows[:8])
+
+
+def test_restored_stores_open_only_when_reading_a_batch(tmp_path, monkeypatch):
+    import pickle
+    import zarr
+    from spinnme.data import cache
+    path, _ = cube(tmp_path)
+    config = configuration(path)
+    prepared = load_or_prepare_data_module(config, tmp_path/'cache')
+    expected = prepared.train_datasets[0][0]['stokes'].clone()
+    cache._LOADED_MODULES.clear()
+    opened = []
+    original = zarr.open_array
+    def track(*args, **kwargs):
+        opened.append(args[0])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(zarr, 'open_array', track)
+    restored = load_or_prepare_data_module(config, tmp_path/'cache')
+    assert not opened
+    torch.testing.assert_close(restored.train_datasets[0][0]['stokes'], expected)
+    assert opened
+    worker = pickle.loads(pickle.dumps(restored.train_datasets[0]))
+    assert not worker.data._opened
+    torch.testing.assert_close(worker[0]['stokes'], expected)
+
+
+def test_legacy_coordinate_cache_requires_rebuild(tmp_path):
+    from spinnme.data.cache import _LOADED_MODULES
+    path, _ = cube(tmp_path)
+    config = configuration(path)
+    module = load_or_prepare_data_module(config, tmp_path/'cache')
+    manifest = Path(module.cache_manifest)
+    metadata = json.loads(manifest.read_text())
+    assert metadata.pop('coordinate_convention_version') == 2
+    manifest.write_text(json.dumps(metadata))
+    _LOADED_MODULES.clear()
+    with pytest.raises(ValueError, match='--reload'):
+        load_or_prepare_data_module(config, tmp_path/'cache')

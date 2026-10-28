@@ -9,7 +9,7 @@ data:
       instrument_id: PHI_HRT
       line_id: fe-i-6173
       time_reference: observation
-  num_workers: 0
+  num_workers: 4
   num_dataset_workers: 16
   batch_size: 4096
   dataset_batch_size: 512
@@ -49,9 +49,7 @@ model:
   encoding_config:
     type: fourier
     num_frequencies: [8, 8, 8, 4]
-    max_frequencies: [64, 64, 64, 4]
-  b_sinh_scale: 10
-  v_sinh_scale: 1
+    max_frequencies: [4096, 4096, 4096, 4]
 
 training:
   plot_validation: true

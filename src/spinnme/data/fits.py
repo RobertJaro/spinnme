@@ -214,6 +214,8 @@ def read_fits_observation(path, *, data_hdu=0, spatial_header_hdu=None,
         wl = wavelength_configuration(header, stokes.shape[-1], wavelength_center,
                                       wavelength_grid, wavelength_unit,
                                       wavelength_grid_is_offsets, wavelength_hdu, hdus)
+    source_stokes = stokes
+    selected = np.arange(stokes.shape[-1])
     if wavelength_range is not None:
         # Bounds are absolute wavelengths in wavelength_unit, regardless of
         # whether the input grid contains absolute values or line offsets.
@@ -239,7 +241,7 @@ def read_fits_observation(path, *, data_hdu=0, spatial_header_hdu=None,
     time_metadata, model_time = observation_times(header, time_reference, time_scale)
     if continuum_index is not None and not 0 <= int(continuum_index) < stokes.shape[-1]:
         raise ValueError("continuum_index must be a zero-based wavelength index.")
-    return {"stokes": stokes, "header": spatial_header(header, stokes.shape[:2], spatial_wcs_axes),
+    return {"stokes": stokes, "source_stokes": source_stokes, "wavelength_indices": selected, "header": spatial_header(header, stokes.shape[:2], spatial_wcs_axes),
             "original_header": original_header, "wavelength_config": wl,
             "model_time": model_time, "continuum_index": continuum_index,
             "metadata": {"source_paths": [str(Path(path).resolve())], "line_id": line_id,

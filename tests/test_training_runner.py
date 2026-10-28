@@ -127,3 +127,18 @@ def test_final_checkpoint_matches_snapshot_between_validation_boundaries(tmp_pat
     _, _, resumed = runner.run(config, resume=True)
     assert resumed.global_step == 4
     assert torch.load(tmp_path/'run/last.ckpt', map_location='cpu', weights_only=False)['global_step'] == 4
+
+
+def test_resume_allows_additional_validation_but_preserves_training_settings(tmp_path):
+    from spinnme.configuration import write_config
+    original = configuration(tmp_path)
+    original['data'] = {'train_configs': [{'data_path': 'original.fits'}],
+                        'valid_config': {'instrument_id': 'HMI', 'sample_idx': 0}}
+    source = write_config(original, tmp_path/'resolved.yaml')
+    changed = copy.deepcopy(original)
+    changed['data']['valid_config'] = [original['data']['valid_config'],
+                                      {'instrument_id': 'HMI', 'sample_idx': 1}]
+    runner._resume_configuration(changed, source)
+    changed['data']['train_configs'][0]['data_path'] = 'different.fits'
+    with pytest.raises(ValueError, match='scientific/data/objective'):
+        runner._resume_configuration(changed, source)

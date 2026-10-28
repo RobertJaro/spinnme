@@ -59,7 +59,7 @@ Use `spinnme config copy NAME --output inversion.yaml`, edit the required sectio
 | --- | --- |
 | `path`, `work_path` | Run outputs and working files |
 | `data.train_configs` | List of training datasets and their reader settings |
-| `data.valid_config` | One validation observation and its reader settings |
+| `data.valid_config` | One validation dataset mapping, or a list for multiple lines/instruments |
 | `instrument` | List of forward models, lines, spectral responses and optional corrections |
 | `model` | Network type, size and coordinate encoding |
 | `training` | Run budget, optimizer, validation and execution settings |
@@ -87,7 +87,7 @@ Every dataset supplies `type`, `data_path` and `instrument_id`. Supported public
 
 ## Training and model settings
 
-Use [training options](training_options.md) for budgets, learning rates, optimizers, batching, model size, normalization and sampling recipes. Optional `model.b_sinh_scale` and `model.v_sinh_scale` set output scales in gauss and km/s.
+Use [training options](training_options.md) for budgets, learning rates, optimizers, batching, model size, normalization and sampling recipes. Magnetic-field and velocity outputs are linear by default in all bundled run configurations. Optional `model.b_sinh_scale` and `model.v_sinh_scale` enable sinh output scaling in gauss and km/s; omit them or set them to `null` to keep outputs linear.
 
 `data.ref_time` sets the time origin; leave it `null` to use the earliest selected observation. `seconds_per_dt`, `Rs_per_ds` and `gauss_per_dB` define the time, length and field scales. Keep these settings consistent when comparing runs or resuming training.
 

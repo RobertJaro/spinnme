@@ -80,7 +80,7 @@ def build_parser():
     download.add_argument("--cadence", help="Archive sampling interval, e.g. 90s or 720s; inferred from HMI product if omitted")
     download.add_argument("--telescope", choices=["hrt", "fdt"], default="hrt")
     download.add_argument("--time-scale", choices=["utc", "tai"], default="utc")
-    download.add_argument("--url", action="append", default=[], help="Explicit public Hinode FITS URL; repeat for a raster")
+    download.add_argument("--url", action="append", default=[], help="Explicit public FITS URL; repeat for a collection")
     crop = commands.add_parser("crop", help="Crop FITS images and cubes while preserving spatial WCS and aligned extensions")
     crop.add_argument("--input", nargs="+", required=True, help="FITS files, directories or quoted globs")
     crop.add_argument("--output", required=True, help="New or empty directory for cropped FITS files")
@@ -110,11 +110,11 @@ def _resolved(args):
                           work_path=args.work_path, instrument=args.instrument, bindings=getattr(args, "bindings", None))
 
 
-def _result(snapshot, args, observation=None):
+def _result(snapshot, args, observation=None, *, progress=False):
     return snapshot.evaluate(observation=observation if observation is not None else args.observation,
                              parameters=args.parameters, instrument_id=args.instrument_id, time=args.time,
                              batch_size=args.batch_size, mu_limit=args.mu_limit,
-                             shape=args.shape, bounds=args.bounds)
+                             shape=args.shape, bounds=args.bounds, progress=progress)
 
 
 def _run(args):
@@ -153,7 +153,15 @@ def _prep(args):
 
 
 def _export(args):
-    from . import load
+    import sys
+    import numpy as np
+    from astropy.time import Time
+    from astropy import units as u
+    from . import load, __file__ as package_file
+    from .grids import time_offsets
+
+    print(f"SPINNME: {Path(package_file).resolve()}; Python: {sys.executable}", flush=True)
+    print(f"Snapshot: {Path(args.snapshot).expanduser().resolve()}", flush=True)
     with load(args.snapshot, device=args.device) as snapshot:
         if args.all_observations and args.observation:
             raise ValueError("Select --observation or --all-observations.")
@@ -162,7 +170,25 @@ def _export(args):
             raise ValueError("This snapshot has no saved observation grids; supply --observation with a reference FITS.")
         for observation in observations:
             output = Path(args.output) / observation if args.all_observations else Path(args.output)
-            paths = _result(snapshot, args, observation).write(output, format=args.format, overwrite=args.overwrite)
+            row = snapshot.grid(observation, shape=args.shape, bounds=args.bounds, instrument_id=args.instrument_id)
+            native = row.get('slit_pixel_world') is not None
+            print(f"Observation: {row['id']}; instrument: {row['instrument_id']}; "
+                  f"line: {row.get('line_id')}; shape (y,x): {tuple(row['shape'])}; "
+                  f"source files: {len(row.get('source_paths', []))}; "
+                  f"coordinates: {'native slit' if native else 'WCS'}", flush=True)
+            epoch = args.time or row.get('time', {}).get('model_time') or row['header'].get('DATE-OBS')
+            if epoch is not None:
+                base = Time(epoch)
+                offsets = time_offsets(row) if args.time is None and row.get('time_offsets_seconds') is not None else np.array([0.])
+                start, end = (base + np.array([np.nanmin(offsets), np.nanmax(offsets)]) * u.s).utc.isot
+                print(f"Evaluation UTC: {start} to {end}", flush=True)
+            result = _result(snapshot, args, observation, progress=True)
+            print(f"Valid pixels: {np.count_nonzero(result.mask)}/{result.mask.size}", flush=True)
+            for name, values in result.arrays.items():
+                finite = np.asarray(values)[np.isfinite(values)]
+                limits = f"{finite.min():.6g} to {finite.max():.6g}" if finite.size else 'no finite values'
+                print(f"{name}: shape {np.shape(values)}, {limits} {result.units.get(name, '')}", flush=True)
+            paths = result.write(output, format=args.format, overwrite=args.overwrite)
             for path in paths:
                 print(path)
 

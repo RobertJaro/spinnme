@@ -331,6 +331,7 @@ def test_download_urls_reject_filename_collisions_before_transfer(tmp_path, monk
 
 def test_hmi_segment_wcs_alignment_is_checked(tmp_path):
     h=header()
+    h['T_OBS'] = '2024.03.23_00:00:37_TAI'
     paths=[]
     for component in 'IQUV':
         group=[]
@@ -377,7 +378,9 @@ def test_hinode_preset_trains_both_lines_from_one_raster(tmp_path, descending):
     module = SphericalDataModule(work_directory=str(tmp_path/'cache'), **data)
     assert set(module.wavelength_config) == {'HINODE_6301', 'HINODE_6302'}
     spectra = [dataset[0]['stokes'] for dataset in module.train_datasets]
-    assert sum(s.shape[-1] for s in spectra) == len(waves)
+    for spectrum, dataset_config in zip(spectra, config['data']['train_configs']):
+        lower, upper = dataset_config['wavelength_range']
+        assert spectrum.shape[-1] == np.count_nonzero((waves >= lower) & (waves < upper))
     observations = module.get_observations()
     assert {o['line_id'] for o in observations} == {'fe-i-6301', 'fe-i-6302'}
     assert all(o['reader']['wavelength_range'] is not None for o in observations)

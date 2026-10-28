@@ -136,3 +136,68 @@ def test_partial_validation_keeps_metrics_but_skips_incomplete_maps(monkeypatch)
     module.on_validation_epoch_end()
     assert not logger.images
     assert module.val_outputs == []
+
+
+def test_shared_storage_outputs_restore_native_maps_and_deduplicate_batches(monkeypatch):
+    module = _module()
+    logger = ImageRecorder()
+    module._trainer = SimpleNamespace(global_step=2, sanity_checking=False, loggers=[logger])
+    monkeypatch.setattr(module, 'log_dict', lambda metrics: None)
+    batch = validation_batch()
+    order = torch.tensor([7, 2, 14, 1, 0, 10, 12, 9, 3, 15, 4, 6, 11, 8, 5, 13])
+    batch['pixel_index'] = order
+    result = module.validation_step(batch, 0)
+    # Distinct values make transposed or storage-order maps detectable.
+    result['b_field'] = order.float()[:, None]
+    captured = []
+    monkeypatch.setattr(module, 'plot_parameter_overview', lambda values: captured.append(values))
+    for name in ('plot_B_rtp_log', 'plot_B_rtp', 'plot_v_rtp', 'plot_limb_correction',
+                 'plot_stokes', 'plot_profile'):
+        monkeypatch.setattr(module, name, lambda *args: None)
+    detached = {key: value.detach().cpu() for key, value in result.items()}
+    module.val_outputs = [detached, detached]  # DistributedSampler can repeat a batch.
+    module.on_validation_epoch_end()
+    np.testing.assert_array_equal(captured[0]['b_field'].ravel(), np.arange(16))
+
+
+def test_hinode_validation_plot_contains_both_native_line_windows(tmp_path, monkeypatch):
+    from test_hinode_slits import config, scan
+    from spinnme.loader.spherical import SphericalDataModule
+
+    settings = config(scan(tmp_path), tmp_path)
+    settings['data']['num_workers'] = 0
+    dm = SphericalDataModule(work_directory=str(tmp_path/'cache'), **settings['data'])
+    module = MESphericalModule(image_shape=dm.image_shape, wavelength_config=dm.wavelength_config,
+        instrument_config=settings['instrument'], gauss_per_dB=1000, Rs_per_ds=1, seconds_per_dt=3600,
+        model_config={'type': 'mlp', 'dim': 4, 'n_layers': 1, 'encoding_config': {'type': 'identity'}})
+    module._trainer = SimpleNamespace(global_step=2, sanity_checking=False, loggers=[ImageRecorder()])
+    metrics, figures, parameter_lines = {}, [], []
+    monkeypatch.setattr(module, 'log_dict', lambda values: metrics.update(values))
+    monkeypatch.setattr(module, 'plot_parameter_overview',
+                        lambda values: parameter_lines.append(module._validation_image_suffix))
+    for name in ('plot_limb_correction', 'plot_stokes'):
+        monkeypatch.setattr(module, name, lambda *args: None)
+    monkeypatch.setattr(module, '_log_validation_image', lambda figure, name:
+                        figures.append((figure, name + module._validation_image_suffix)))
+    module.on_validation_epoch_start()
+    # Two lines have different channel counts. Repeated batches emulate DDP.
+    for index, batch in enumerate(dm.val_dataloader()):
+        output = module.validation_step(batch, index)
+        module.on_validation_batch_end(output, batch, index)
+        module.on_validation_batch_end(output, batch, index)
+    module.on_validation_epoch_end()
+    assert {'valid.objective', 'valid.HINODE_6301.objective'} <= metrics.keys()
+    assert parameter_lines == [' (HINODE_6302)', ' (HINODE_6301)']
+    assert [name for _, name in figures] == ['B', 'B_rtp', 'v', 'Stokes profiles - Comparison']
+    figure, name = figures[-1]
+    assert len(figure.axes) == 24
+    for column, instrument in ((0, 'HINODE_6301'), (3, 'HINODE_6302')):
+        axis = figure.axes[column]
+        assert instrument in axis.get_title()
+        dataset = next(ds for ds in dm.valid_datasets if ds.instrument_id == instrument)
+        wavelength = (dataset.wavelength_config['wavelength_center'] +
+                      dataset.wavelength_config['wavelength_grid']).to_value('Angstrom')
+        np.testing.assert_allclose(axis.lines[0].get_xdata(), wavelength, rtol=0, atol=1e-6)
+        np.testing.assert_allclose(axis.lines[0].get_ydata(), dataset[0]['stokes'][:, 0].mean(0))
+    figure.savefig(tmp_path/'both-hinode-lines.png')
+    assert not plt.fignum_exists(figure.number)

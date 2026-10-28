@@ -17,6 +17,18 @@ from spinnme.train.atomic_functions import get_zeeman_lookup_id, load_zeeman_loo
 from spinnme.train.profile_functions import Voigt
 
 
+class _ZeemanStrengthLookup(nn.Module):
+    """Derived strengths that follow device/dtype without checkpoint entries."""
+
+    def __init__(self, lookup, reference):
+        super().__init__()
+        for key, value in lookup.items():
+            self.register_buffer(key, reference.new_tensor(value), persistent=False)
+
+    def __getitem__(self, key):
+        return self._buffers[key]
+
+
 class MEAtmosphere(nn.Module):
     ''' Class to contain the ME atmosphere properties'''
 
@@ -32,15 +44,12 @@ class MEAtmosphere(nn.Module):
         self.register_buffer('g_up', torch.tensor(g_up, dtype=torch.float32))  # Lande factor for upper level
         self.register_buffer('g_low', torch.tensor(g_low, dtype=torch.float32))
 
-        zeeman_strength_lookup = load_zeeman_lookup(j_up, j_low)
-        zeeman_strength_lookup = {k: nn.Parameter(torch.tensor(v, dtype=torch.float32), requires_grad=False)
-                                  for k, v in zeeman_strength_lookup.items()}
-        self.zeeman_strength_lookup = nn.ParameterDict(zeeman_strength_lookup)
         self._build_transition_cache()
 
     def _build_transition_cache(self):
         # Atomic levels are fixed. Read their scalars once, never per synthesis.
         j_up, j_low = (float(value.detach().cpu()) for value in (self.j_up, self.j_low))
+        self.zeeman_strength_lookup = _ZeemanStrengthLookup(load_zeeman_lookup(j_up, j_low), self.j_up)
         assert (2 * j_up + 1) % 1 == 0, 'nUp must be integer'
         transitions, splittings = [], []
         for i_up in range(int(2 * j_up + 1)):
@@ -62,9 +71,9 @@ class MEAtmosphere(nn.Module):
         self._build_transition_cache()
         return self
 
-    def _load_from_state_dict(self, *args, **kwargs):
-        super()._load_from_state_dict(*args, **kwargs)
-        # Rebuild derived profiles from the loaded atomic constants.
+    def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
+        super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
+        # Atomic constants remain persistent: preserve the saved line definition.
         self._build_transition_cache()
 
     def calculate_voigt_faraday_profiles(self, nu, nu_m, damping, lambda_dop, **kwargs):
@@ -317,6 +326,25 @@ class HMIMEAtmosphere(MEAtmosphere):
             sin_inc2_cos2azi=sin_inc2_cos2azi,
             **kwargs,
         )
+
+class HinodeMEAtmosphere(MEAtmosphere):
+    """Calibrated SP Level-1 polarization: +Q along solar east-west.
+
+    SolarSoft calib_sbsp operation 9 already removes spacecraft roll from Q/U.
+    The public image azimuth is CCW from +y; the solver angle is CCW from
+    solar west. With SPINNME's pAng, chi = psi - pAng + pi/2.
+    """
+
+    def forward(self, sin_inc2_sin2azi, sin_inc2_cos2azi, image_p_angle=None, **kwargs):
+        if image_p_angle is None:
+            raise ValueError('Hinode synthesis requires image_p_angle in radians, including for zero roll.')
+        c, s = torch.cos(2 * image_p_angle), torch.sin(2 * image_p_angle)
+        return super().forward(
+            sin_inc2_cos2azi=-(sin_inc2_cos2azi * c + sin_inc2_sin2azi * s),
+            sin_inc2_sin2azi=sin_inc2_cos2azi * s - sin_inc2_sin2azi * c,
+            **kwargs,
+        )
+
 
 class PHIMEAtmosphere(MEAtmosphere):
     ''' Class to contain the PHI ME atmosphere properties'''

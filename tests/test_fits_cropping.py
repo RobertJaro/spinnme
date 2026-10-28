@@ -22,7 +22,7 @@ def acquisition(tmp_path, kind='primary', roll=0.):
     h = header((10, 12))
     for key in ('OBS_VR', 'OBS_VW', 'OBS_VN'):
         del h[key]
-    h.update(T_REC='2024.03.23_00:00:37_TAI', HCAMID=2, QUALITY=0,
+    h.update(T_REC='2024.03.23_00:00:37_TAI', T_OBS='2024.03.23_00:00:37_TAI', HCAMID=2, QUALITY=0,
              TELESCOP='SDO/HMI', INSTRUME='HMI_SIDE1', CCD_X0=100., CCD_Y0=200.)
     angle = np.deg2rad(roll)
     h.update(PC1_1=np.cos(angle), PC1_2=-np.sin(angle),
